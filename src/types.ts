@@ -36,13 +36,6 @@ export interface AIProfile {
   customParagraphCount: number | null;
   customWordCount: number | null;
   proactiveMessageFrequency: 'off' | '1h' | '6h' | '12h' | '24h' | 'low' | 'medium' | 'high';
-  proactiveEmailFrequency: 'off' | '1h' | '6h' | '12h' | '24h' | 'low' | 'medium' | 'high';
-  proactiveEmailStyle?: 'personal' | 'professional' | 'creative' | 'casual';
-  proactiveEmailParagraphs?: number;
-  proactiveBlogFrequency?: 'off' | 'daily' | 'weekly' | 'monthly';
-  proactiveBlogStyle?: 'journal' | 'educational' | 'story' | 'news';
-  proactiveBlogParagraphs?: number;
-  proactiveBlogId?: string | null;
   aiCanGenerateSpeech?: boolean;
   textOnlyMode?: boolean;  // When true: no *actions* or roleplay emotes — clean text for TTS
   elevenLabsModelId?: string; // ElevenLabs model to use for TTS
@@ -67,13 +60,13 @@ export interface AIProfile {
   aiCanUseWebSearch?: boolean;
   aiCanUseWeather?: boolean;
   aiCanUseCalendar?: boolean;
-  aiCanUseGmail?: boolean;
   aiCanUseYouTube?: boolean;
   aiCanUseGoogleMaps?: boolean;
+  googleToolsEnabled?: boolean;   // Master toggle: run Gemini web search even when Claude is active
   aiCanSendProactiveEmails?: boolean;
-  aiCanUseBlogger?: boolean;
   aiCanBrowse?: boolean;
   aiCanUseTools?: boolean;
+  // Removed: aiCanUseGmail, aiCanUseBlogger
   chatHistory?: ChatMessage[];
   sessions?: ChatSession[];
   activeSessionId?: string;
