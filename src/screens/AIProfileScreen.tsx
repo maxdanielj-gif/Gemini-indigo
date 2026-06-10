@@ -57,16 +57,10 @@ const AIProfileScreen: React.FC = () => {
   const [customParagraphCount, setCustomParagraphCount] = useState<number | null>(aiProfile.customParagraphCount || null);
   const [customWordCount, setCustomWordCount] = useState<number | null>(aiProfile.customWordCount || null);
   const [proactiveMessageFrequency, setProactiveMessageFrequency] = useState<AIProfile['proactiveMessageFrequency']>(aiProfile.proactiveMessageFrequency || 'off');
-  const [proactiveEmailFrequency, setProactiveEmailFrequency] = useState<AIProfile['proactiveEmailFrequency']>(aiProfile.proactiveEmailFrequency || 'off');
-  const [proactiveEmailStyle, setProactiveEmailStyle] = useState<AIProfile['proactiveEmailStyle']>(aiProfile.proactiveEmailStyle || 'personal');
-  const [proactiveEmailParagraphs, setProactiveEmailParagraphs] = useState<number>(aiProfile.proactiveEmailParagraphs || 3);
-  const [proactiveBlogFrequency, setProactiveBlogFrequency] = useState<AIProfile['proactiveBlogFrequency']>(aiProfile.proactiveBlogFrequency || 'off');
-  const [proactiveBlogStyle, setProactiveBlogStyle] = useState<AIProfile['proactiveBlogStyle']>(aiProfile.proactiveBlogStyle || 'journal');
-  const [proactiveBlogParagraphs, setProactiveBlogParagraphs] = useState<number>(aiProfile.proactiveBlogParagraphs || 5);
-  const [proactiveBlogId, setProactiveBlogId] = useState<string | null>(aiProfile.proactiveBlogId || null);
+
   const [availableBlogs, setAvailableBlogs] = useState<{id: string, name: string}[]>([]);
   const [isFetchingBlogs, setIsFetchingBlogs] = useState(false);
-  const [aiCanUseBlogger, setAiCanUseBlogger] = useState<boolean>(aiProfile.aiCanUseBlogger || false);
+  const [googleToolsEnabled, setGoogleToolsEnabled] = useState<boolean>(aiProfile.googleToolsEnabled || false);
   const [aiCanUseWebSearch, setAiCanUseWebSearch] = useState<boolean>(aiProfile.aiCanUseWebSearch || false);
   const [aiCanUseWeather, setAiCanUseWeather] = useState<boolean>(aiProfile.aiCanUseWeather || false);
   const [aiCanUseCalendar, setAiCanUseCalendar] = useState<boolean>(aiProfile.aiCanUseCalendar || false);
@@ -240,13 +234,7 @@ const AIProfileScreen: React.FC = () => {
     setDislikes(aiProfile.dislikes || '');
     setSpeakingStyle(aiProfile.speakingStyle || '');
     setProactiveMessageFrequency(aiProfile.proactiveMessageFrequency || 'off');
-    setProactiveEmailFrequency(aiProfile.proactiveEmailFrequency || 'off');
-    setProactiveEmailStyle(aiProfile.proactiveEmailStyle || 'personal');
-    setProactiveEmailParagraphs(aiProfile.proactiveEmailParagraphs || 3);
-    setProactiveBlogFrequency(aiProfile.proactiveBlogFrequency || 'off');
-    setProactiveBlogStyle(aiProfile.proactiveBlogStyle || 'journal');
-    setProactiveBlogParagraphs(aiProfile.proactiveBlogParagraphs || 5);
-    setAiCanUseBlogger(aiProfile.aiCanUseBlogger || false);
+    setGoogleToolsEnabled(aiProfile.googleToolsEnabled || false);
     setAiCanGenerateSpeech(aiProfile.aiCanGenerateSpeech ?? true);
     setTextOnlyMode(aiProfile.textOnlyMode ?? false);
     setElevenLabsModelId(aiProfile.elevenLabsModelId || 'eleven_v3');
@@ -307,13 +295,6 @@ const AIProfileScreen: React.FC = () => {
       customParagraphCount,
       customWordCount,
       proactiveMessageFrequency,
-      proactiveEmailFrequency,
-      proactiveEmailStyle,
-      proactiveEmailParagraphs,
-      proactiveBlogFrequency,
-      proactiveBlogStyle,
-      proactiveBlogParagraphs,
-      proactiveBlogId,
       knowsItsAI,
       model,
       llmProvider,
@@ -326,10 +307,9 @@ const AIProfileScreen: React.FC = () => {
       aiCanUseWebSearch,
       aiCanUseWeather,
       aiCanUseCalendar,
-      aiCanUseGmail: aiProfile.aiCanUseGmail,
       aiCanUseYouTube: aiProfile.aiCanUseYouTube,
       aiCanUseGoogleMaps,
-      aiCanUseBlogger,
+      googleToolsEnabled,
       imageStyle,
       imageGenerationInstructions,
       aiCanGenerateSpeech,
@@ -382,13 +362,6 @@ const AIProfileScreen: React.FC = () => {
       customParagraphCount,
       customWordCount,
       proactiveMessageFrequency: proactiveMessageFrequency,
-      proactiveEmailFrequency: proactiveEmailFrequency,
-      proactiveEmailStyle,
-      proactiveEmailParagraphs,
-      proactiveBlogFrequency: proactiveBlogFrequency,
-      proactiveBlogStyle,
-      proactiveBlogParagraphs,
-      proactiveBlogId: proactiveBlogId,
       knowsItsAI,
       model: aiProfile.model,
       llmProvider,
@@ -400,10 +373,9 @@ const AIProfileScreen: React.FC = () => {
       aiCanUseWebSearch,
       aiCanUseWeather,
       aiCanUseCalendar,
-      aiCanUseGmail: aiProfile.aiCanUseGmail,
       aiCanUseYouTube: aiProfile.aiCanUseYouTube,
       aiCanUseGoogleMaps,
-      aiCanUseBlogger,
+      googleToolsEnabled,
       imageStyle,
       imageGenerationInstructions,
       aiCanGenerateSpeech,
@@ -475,10 +447,9 @@ const AIProfileScreen: React.FC = () => {
         aiCanUseWebSearch: false,
         aiCanUseWeather: false,
         aiCanUseCalendar: false,
-        aiCanUseGmail: false,
         aiCanUseYouTube: false,
         aiCanUseGoogleMaps: false,
-        aiCanUseBlogger: false,
+        googleToolsEnabled: false,
         aiCanBrowse: false,
         chatHistory: [],
         memories: [],
@@ -1199,11 +1170,11 @@ const AIProfileScreen: React.FC = () => {
                         </div>
                         <div className="flex items-center justify-between">
                             <div>
-                                <label className="text-sm font-medium text-indigo-700 dark:text-indigo-300">Google Maps</label>
-                                <span className="block text-xs text-indigo-500 dark:text-indigo-400">Enable Google Maps visualizer feature.</span>
+                                <label className="text-sm font-medium text-indigo-700 dark:text-indigo-300">Google Tools</label>
+                                <span className="block text-xs text-indigo-500 dark:text-indigo-400">Enable Gemini web search even when Claude is the chat model.</span>
                             </div>
-                            <button onClick={() => setAiCanUseGoogleMaps(!aiCanUseGoogleMaps)} className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${aiCanUseGoogleMaps ? 'bg-indigo-600' : 'bg-indigo-200 dark:bg-indigo-800'}`}>
-                                <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${aiCanUseGoogleMaps ? 'translate-x-5' : 'translate-x-0'}`} />
+                            <button onClick={() => setGoogleToolsEnabled(!googleToolsEnabled)} className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${googleToolsEnabled ? 'bg-indigo-600' : 'bg-indigo-200 dark:bg-indigo-800'}`}>
+                                <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${googleToolsEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
                             </button>
                         </div>
 
