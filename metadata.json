@@ -1,6 +1,0 @@
-{
-  "name": "Gemini Indigo",
-  "description": "An AI platform utilizing Gemini.",
-  "requestFramePermissions": ["camera", "microphone", "geolocation"],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
