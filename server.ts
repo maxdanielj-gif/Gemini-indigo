@@ -832,6 +832,38 @@ app.post("/api/chat", async (req, res) => {
   const baseSystemPrompt = buildSystemPrompt(aiProfile, userProfile, timeZone, memories, journal, knowledgeBase, currentUserMessage);
   const useGemini = isGeminiModel(selectedModel);
 
+  // ── Google Tools: background Gemini web search context for Claude ──────────
+  // When the Google Tools toggle is on and Claude is handling the chat, we
+  // silently call a cheap Gemini model to do a grounded web search first,
+  // then inject that real-time context into Claude's system prompt.
+  let googleToolsContext = '';
+  if (aiProfile.googleToolsEnabled && !useGemini && currentUserMessage.trim()) {
+    try {
+      const gtApiKey = geminiKey || process.env.GEMINI_API_KEY;
+      if (gtApiKey) {
+        const groundingBody = {
+          contents: [{ role: 'user', parts: [{ text: currentUserMessage }] }],
+          tools: [{ googleSearch: {} }],
+          generationConfig: { temperature: 0.2, maxOutputTokens: 512 },
+        };
+        const groundingRes = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${gtApiKey}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(groundingBody) }
+        );
+        if (groundingRes.ok) {
+          const groundingData = await groundingRes.json();
+          const groundingText = groundingData.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          if (groundingText.trim()) {
+            googleToolsContext = `\n\n[Google Search Context — use this real-time information to inform your response if relevant]:\n${groundingText}`;
+          }
+        }
+      }
+    } catch (e: any) {
+      console.warn('[Google Tools] Background grounding failed (non-fatal):', e.message);
+    }
+  }
+
+
   // Provider note — always tells the AI what LLM it's running on
   const providerNote = useGemini
     ? `[System: You are currently running on Gemini (Google). You have the ability to view and discuss YouTube videos when the user shares a YouTube link — do not tell the user you cannot view YouTube links.]`
@@ -854,7 +886,7 @@ app.post("/api/chat", async (req, res) => {
     }
   }
 
-  const systemPrompt = [baseSystemPrompt, providerNote, locationNote].filter(Boolean).join('\n\n');
+  const systemPrompt = [baseSystemPrompt, providerNote, locationNote, googleToolsContext].filter(Boolean).join('\n\n');
 
   // ── Gemini path ───────────────────────────────────────────────────────────
   if (useGemini) {
