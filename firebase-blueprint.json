@@ -1,0 +1,52 @@
+{
+  "collections": [
+    {
+      "name": "indigo_backups",
+      "route": "indigo_backups/{userId}",
+      "description": "User database backups for everything except large media.",
+      "fields": [],
+      "rules": [
+        {
+          "type": "read",
+          "condition": "request.auth != null && request.auth.uid == userId"
+        },
+        {
+          "type": "write",
+          "condition": "request.auth != null && request.auth.uid == userId"
+        }
+      ]
+    },
+    {
+      "name": "indigo_gallery_manifests",
+      "route": "indigo_gallery_manifests/{userId}",
+      "description": "User gallery image manifests.",
+      "fields": [],
+      "rules": [
+        {
+          "type": "read",
+          "condition": "request.auth != null && request.auth.uid == userId"
+        },
+        {
+          "type": "write",
+          "condition": "request.auth != null && request.auth.uid == userId"
+        }
+      ]
+    },
+    {
+      "name": "indigo_kb_manifests",
+      "route": "indigo_kb_manifests/{userId}",
+      "description": "User knowledge base manifests.",
+      "fields": [],
+      "rules": [
+        {
+          "type": "read",
+          "condition": "request.auth != null && request.auth.uid == userId"
+        },
+        {
+          "type": "write",
+          "condition": "request.auth != null && request.auth.uid == userId"
+        }
+      ]
+    }
+  ]
+}

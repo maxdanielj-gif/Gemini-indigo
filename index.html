@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+
+    <!-- ── Viewport: prevent zoom on input focus, full-screen on Android ── -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+
+    <title>indigo AI</title>
+
+    <!-- ── PWA / Web App Manifest ── -->
+    <link rel="manifest" href="/manifest.json" />
+
+    <!-- ── Theme color (Android Chrome toolbar + task switcher) ── -->
+    <meta name="theme-color" content="#4f46e5" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#1e1b4b" media="(prefers-color-scheme: dark)" />
+
+    <!-- ── Android "Add to Home Screen" ── -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="application-name" content="indigo AI" />
+
+    <!-- ── iOS Safari (for users who open on iPhone/iPad) ── -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="indigo" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+
+    <!-- ── Favicon ── -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+
+    <!-- ── SEO / sharing meta ── -->
+    <meta name="description" content="indigo AI — your personal AI companion" />
+
+    <!-- ── Tailwind (loaded at runtime during dev; replaced by build output in prod) ── -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: { indigo: { 950: '#1e1b4b' } }
+          }
+        }
+      }
+    </script>
+
+    <!-- ── Apply saved theme before first paint to prevent flash ── -->
+    <script>
+      (function () {
+        try {
+          var theme = localStorage.getItem('theme');
+          var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          if (theme === 'dark' || (!theme && prefersDark)) {
+            document.documentElement.classList.add('dark');
+            document.querySelector('meta[name="theme-color"][media*="light"]')
+              && (document.querySelector('meta[name="theme-color"][media*="light"]').content = '#4f46e5');
+          } else {
+            document.documentElement.classList.remove('dark');
+          }
+        } catch (e) {}
+      })();
+    </script>
+
+    <!-- ── Safe-area insets for notched / punch-hole Android screens ── -->
+    <style>
+      :root {
+        --sat: env(safe-area-inset-top, 0px);
+        --sar: env(safe-area-inset-right, 0px);
+        --sab: env(safe-area-inset-bottom, 0px);
+        --sal: env(safe-area-inset-left, 0px);
+      }
+      /* Prevent overscroll bounce that makes the app feel like a webpage */
+      html, body {
+        height: 100%;
+        overscroll-behavior: none;
+        -webkit-overflow-scrolling: touch;
+      }
+      /* Respect safe areas on all sides (status bar top, home indicator bottom) */
+      #root {
+        padding-top: env(safe-area-inset-top, 0px);
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+        box-sizing: border-box;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
