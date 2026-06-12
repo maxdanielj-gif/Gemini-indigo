@@ -1177,6 +1177,15 @@ const AIProfileScreen: React.FC = () => {
                                 <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${googleToolsEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
                             </button>
                         </div>
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <label className="text-sm font-medium text-indigo-700 dark:text-indigo-300">Nearby Places</label>
+                                <span className="block text-xs text-indigo-500 dark:text-indigo-400">Share what's around your location so the AI is aware of your surroundings.</span>
+                            </div>
+                            <button onClick={() => setAiCanUseGoogleMaps(!aiCanUseGoogleMaps)} className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${aiCanUseGoogleMaps ? 'bg-indigo-600' : 'bg-indigo-200 dark:bg-indigo-800'}`}>
+                                <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${aiCanUseGoogleMaps ? 'translate-x-5' : 'translate-x-0'}`} />
+                            </button>
+                        </div>
 
                         {/* Provider selector */}
                         <div>
