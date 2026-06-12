@@ -1483,22 +1483,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const firebaseGalleryBackup = async (onProgress?: (done: number, total: number) => void): Promise<number> => {
     if (!userId) throw new Error("Set a User ID in Cloud Sync settings before backing up the gallery.");
-    // Gallery is lazily loaded — only populated when the Gallery screen is visited.
-    // If backup is triggered from Settings before that, read directly from IndexedDB.
-    let galleryToBackup = gallery;
-    if (!galleryLoaded) {
-      const galleryIds = await loadFromDB('indigo_app_data_gallery_ids');
-      if (galleryIds && Array.isArray(galleryIds)) {
-        const items = await Promise.all(
-          galleryIds.map(async (id: string) => {
-            const itemStr = await loadFromDB(`indigo_app_data_gallery_item_${id}`);
-            return itemStr ? (typeof itemStr === 'string' ? JSON.parse(itemStr) : itemStr) : null;
-          })
-        );
-        galleryToBackup = items.filter((item): item is GalleryItem => item !== null);
-      } else {
-        galleryToBackup = [];
+    // Always read directly from IndexedDB so we get every saved item regardless
+    // of whether the Gallery screen has been visited this session.
+    let galleryToBackup: GalleryItem[] = gallery;
+    const galleryIds = await loadFromDB('indigo_app_data_gallery_ids');
+    if (galleryIds && Array.isArray(galleryIds) && galleryIds.length > 0) {
+      const items = await Promise.all(
+        galleryIds.map(async (id: string) => {
+          const itemStr = await loadFromDB(`indigo_app_data_gallery_item_${id}`);
+          return itemStr ? (typeof itemStr === 'string' ? JSON.parse(itemStr) : itemStr) : null;
+        })
+      );
+      const idbItems = items.filter((item): item is GalleryItem => item !== null);
+      // Use whichever source has more items
+      if (idbItems.length >= galleryToBackup.length) {
+        galleryToBackup = idbItems;
       }
+    }
+    if (galleryToBackup.length === 0) {
+      throw new Error("No gallery images found. Visit the Gallery screen first, then try again.");
     }
     return uploadGalleryToFirebaseStorage(userId, galleryToBackup, firebaseRuntimeConfig, onProgress);
   };
