@@ -285,10 +285,10 @@ export async function uploadGalleryToFirebaseStorage(
   const storage = getStorage(app, `gs://${storageBucket.replace(/^gs:\/\//, '').trim()}`);
   const db = getDb(runtime);
 
-  const validItems = gallery.filter(item => item.url && item.url.startsWith('data:'));
+  // Accept both data: URLs (locally stored) and http/https URLs (CDN-hosted)
+  const validItems = gallery.filter(item => item.url && (item.url.startsWith('data:') || item.url.startsWith('http')));
   if (validItems.length === 0) throw new Error(
-    "No local gallery images found to upload. " +
-    "Images must be stored locally (as data: URLs) to be backed up."
+    "No gallery images found to upload. Visit the Gallery screen first to load your images, then try again."
   );
 
   let uploaded = 0;
@@ -296,9 +296,25 @@ export async function uploadGalleryToFirebaseStorage(
 
   for (let i = 0; i < validItems.length; i++) {
     const item = validItems[i];
-    const mimeMatch = item.url.match(/data:image\/([^;]+);/);
-    const ext = mimeMatch ? mimeMatch[1].replace('+xml', '') : 'png';
-    const base64 = item.url.includes(',') ? item.url.split(',')[1] : item.url;
+    // Normalise to base64 — convert http URLs by fetching them first
+    let base64: string;
+    let ext: string;
+    if (item.url.startsWith('http')) {
+      const imgRes = await fetch(item.url);
+      if (!imgRes.ok) {
+        console.warn(`Skipping image ${i + 1}: could not fetch from ${item.url} (${imgRes.status})`);
+        continue;
+      }
+      const blob = await imgRes.blob();
+      const mimeType = blob.type || 'image/png';
+      ext = mimeType.split('/')[1]?.replace('+xml', '') || 'png';
+      const arrayBuf = await blob.arrayBuffer();
+      base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuf)));
+    } else {
+      const mimeMatch = item.url.match(/data:image\/([^;]+);/);
+      ext = mimeMatch ? mimeMatch[1].replace('+xml', '') : 'png';
+      base64 = item.url.includes(',') ? item.url.split(',')[1] : item.url;
+    }
     const itemId = item.id || `item_${i}_${Date.now()}`;
     const path = `${userId.trim()}/gallery/${itemId}.${ext}`;
     const fileRef = storageRef(storage, path);
@@ -357,16 +373,24 @@ export async function restoreGalleryFromFirebaseStorage(
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
-    // Prefer the stored downloadUrl; fall back to deriving from Storage path
-    let downloadUrl = item.downloadUrl;
-    if (!downloadUrl) {
+    // Always get a fresh downloadUrl from the Storage SDK — stored URLs can expire
+    // or require auth tokens that aren't embedded in the saved URL.
+    let downloadUrl: string;
+    try {
       const fileRef = storageRef(storage, item.path);
       downloadUrl = await getDownloadURL(fileRef);
+    } catch (urlErr: any) {
+      // Fall back to stored URL if SDK fetch fails
+      if (item.downloadUrl) {
+        downloadUrl = item.downloadUrl;
+      } else {
+        throw new Error(`Could not get download URL for image ${i + 1}: ${urlErr.message}`);
+      }
     }
 
     // Fetch the image and convert to a local data URL
-    const response = await fetch(downloadUrl!);
-    if (!response.ok) throw new Error(`Failed to download image ${i + 1}: HTTP ${response.status}`);
+    const response = await fetch(downloadUrl);
+    if (!response.ok) throw new Error(`Failed to download image ${i + 1}: HTTP ${response.status}. Check your Firebase Storage rules allow reads.`);
     const blob    = await response.blob();
     const dataUrl = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
