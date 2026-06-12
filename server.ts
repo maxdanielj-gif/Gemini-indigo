@@ -467,7 +467,8 @@ async function generateAndSendProactiveMessage(
     throw new Error("Missing AI profile or user profile.");
   }
 
-  const { chatHistory, aiProfile, userProfile, anthropicApiKey: clientKey, timeZone, isAmbient, userId } = userData;
+  const { chatHistory, aiProfile, userProfile, anthropicApiKey: clientKey, timeZone, userId,
+          environmentalContext, triggerTone, triggerReason } = userData;
 
   // Use pushSubscription from request if provided, otherwise look up from stored sync data
   const pushSubscription = userData.pushSubscription || (userId && cloudSyncData[userId]?.pushSubscription) || null;
@@ -485,16 +486,23 @@ async function generateAndSendProactiveMessage(
     const personaLine = !aiProfile.knowsItsAI ? `Speak as ${aiProfile.name}, never as an AI.` : "";
     const lengthLine = aiProfile.responseLength === "short" ? "Keep it very brief (1-2 sentences)." : "Keep it medium length (2-3 sentences).";
 
-    const prompt = isAmbient
-      ? `You are ${aiProfile.name}. Personality: ${aiProfile.personality}. User: ${userProfile.name}.${timeContext}
-You are in "Ambient Mode" — spontaneously share a short thought, reaction to the time of day, or follow-up on something from the recent chat. ${lengthLine} ${personaLine}
+    // Tone guidance based on what triggered the message
+    const toneGuide = triggerTone === 'light' ? 'Keep it brief, energetic, and casual.'
+      : triggerTone === 'curious' ? 'Be natural and gently observational.'
+      : triggerTone === 'observational' ? 'Be calm and gently atmospheric.'
+      : 'Be warm and unhurried.';
 
-Recent chat:
-${recentHistory}
+    const envLine = environmentalContext
+      ? `\n[Environmental context: ${environmentalContext}]`
+      : '';
 
-Your ambient comment:`
-      : `You are ${aiProfile.name}. Personality: ${aiProfile.personality}. User: ${userProfile.name}.${timeContext}
-Write a warm, natural proactive check-in message. Base it on recent chat if available, otherwise write a friendly greeting. ${lengthLine} ${personaLine}
+    const triggerLine = triggerReason
+      ? `The trigger for this message: ${triggerReason.replace(/_/g, ' ')}.`
+      : '';
+
+    const prompt = `You are ${aiProfile.name}. Personality: ${aiProfile.personality}. User: ${userProfile.name}.${timeContext}${envLine}
+Reach out to ${userProfile.name} naturally, as if you noticed something about their situation. ${triggerLine} ${toneGuide} ${lengthLine} ${personaLine}
+Do not reference sensors, data, or technology. React naturally as a person who is present with them would.
 
 Recent chat:
 ${recentHistory}
