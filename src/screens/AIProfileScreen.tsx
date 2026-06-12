@@ -130,6 +130,13 @@ const AIProfileScreen: React.FC = () => {
   const [timeAwareness, setTimeAwareness] = useState<boolean>(aiProfile.timeAwareness ?? true);
   const [ambientModeState, setAmbientModeState] = useState<boolean>(aiProfile.ambientMode ?? false);
   const [ambientFrequencyState, setAmbientFrequencyState] = useState<AIProfile['ambientFrequency']>(aiProfile.ambientFrequency || 'off');
+  // Environmental awareness state
+  const [envAwarenessEnabled, setEnvAwarenessEnabled] = useState<boolean>(aiProfile.environmentalAwarenessEnabled || false);
+  const [envStillnessMinutes, setEnvStillnessMinutes] = useState<number>(aiProfile.envStillnessMinutes ?? 20);
+  const [envMovementResponse, setEnvMovementResponse] = useState<boolean>(aiProfile.envMovementResponse ?? true);
+  const [envSoundResponse, setEnvSoundResponse] = useState<boolean>(aiProfile.envSoundResponse ?? false);
+  const [envLightResponse, setEnvLightResponse] = useState<boolean>(aiProfile.envLightResponse ?? false);
+  const [envMinGapMinutes, setEnvMinGapMinutes] = useState<number>(aiProfile.envMinGapMinutes ?? 30);
   const [imageStyle, setImageStyle] = useState<string>(aiProfile.imageStyle || 'none');
   const [imageGenerationInstructions, setImageGenerationInstructions] = useState<string[]>(aiProfile.imageGenerationInstructions || []);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
@@ -282,6 +289,12 @@ const AIProfileScreen: React.FC = () => {
     setTimeAwareness(aiProfile.timeAwareness !== undefined ? aiProfile.timeAwareness : true);
     setAmbientModeState(aiProfile.ambientMode ?? false);
     setAmbientFrequencyState(aiProfile.ambientFrequency || 'off');
+    setEnvAwarenessEnabled(aiProfile.environmentalAwarenessEnabled || false);
+    setEnvStillnessMinutes(aiProfile.envStillnessMinutes ?? 20);
+    setEnvMovementResponse(aiProfile.envMovementResponse ?? true);
+    setEnvSoundResponse(aiProfile.envSoundResponse ?? false);
+    setEnvLightResponse(aiProfile.envLightResponse ?? false);
+    setEnvMinGapMinutes(aiProfile.envMinGapMinutes ?? 30);
     setImageStyle(aiProfile.imageStyle || 'none');
     setImageGenerationInstructions(aiProfile.imageGenerationInstructions || []);
   }, [aiProfile]);
@@ -324,6 +337,12 @@ const AIProfileScreen: React.FC = () => {
       customParagraphCount,
       customWordCount,
       proactiveMessageFrequency,
+      environmentalAwarenessEnabled: envAwarenessEnabled,
+      envStillnessMinutes,
+      envMovementResponse,
+      envSoundResponse,
+      envLightResponse,
+      envMinGapMinutes,
       knowsItsAI,
       model,
       llmProvider,
@@ -392,6 +411,12 @@ const AIProfileScreen: React.FC = () => {
       customParagraphCount,
       customWordCount,
       proactiveMessageFrequency: proactiveMessageFrequency,
+      environmentalAwarenessEnabled: envAwarenessEnabled,
+      envStillnessMinutes,
+      envMovementResponse,
+      envSoundResponse,
+      envLightResponse,
+      envMinGapMinutes,
       knowsItsAI,
       model: aiProfile.model,
       llmProvider,
@@ -1012,65 +1037,52 @@ const AIProfileScreen: React.FC = () => {
                         </select>
                     </div>
                     <div>
-                        <label className="block text-sm font-medium text-indigo-700 dark:text-indigo-300 mb-1">Proactive Messages</label>
-                        <select
-                            value={proactiveMessageFrequency}
-                            onChange={(e) => setProactiveMessageFrequency(e.target.value as any)}
-                            className="w-full p-2 border border-indigo-300 dark:border-indigo-700 rounded-md bg-white dark:bg-indigo-900 text-indigo-900 dark:text-indigo-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                        >
-                            <option value="off">Off</option>
-                            <option value="2h">About every 2 hours</option>
-                            <option value="3h">About every 3 hours</option>
-                            <option value="5h">About every 5 hours</option>
-                            <option value="11h">About every 11 hours</option>
-                        </select>
-                        <p className="text-xs text-indigo-500 dark:text-indigo-400 mt-1">
-                            Allow AI to send check-in notifications.
-                        </p>
                     </div>
                 </div>
 
                 <div className="border-t border-indigo-100 dark:border-indigo-800 pt-4">
-                    <h3 className="text-sm font-semibold text-indigo-900 dark:text-indigo-100 mb-3">Proactive Message Status</h3>
-                    <div className="p-3 bg-indigo-50 dark:bg-indigo-900/30 rounded-md text-sm text-indigo-600 dark:text-indigo-400">
-                        {aiProfile.lastProactiveStatus || 'No proactive messages sent yet.'}
-                    </div>
-                </div>
-
-                <div className="border-t border-indigo-100 dark:border-indigo-800 pt-4">
-                    <h3 className="text-sm font-semibold text-indigo-900 dark:text-indigo-100 mb-3">Ambient Mode Settings</h3>
+                    <h3 className="text-sm font-semibold text-indigo-900 dark:text-indigo-100 mb-3">Environmental Awareness</h3>
+                    <p className="text-xs text-indigo-500 dark:text-indigo-400 mb-4">The AI notices changes in your environment and reaches out naturally — when you've been still a while, when you start moving, or when the light or sound around you shifts.</p>
                     <div className="space-y-4">
                         <div className="flex items-center justify-between">
-                            <div className="flex items-center">
-                                <label htmlFor="ambientMode" className="block text-sm font-medium text-indigo-700 dark:text-indigo-300">Enable Ambient Mode</label>
-                                <div className="relative group ml-2" tabIndex={0}>
-                                    <HelpCircle className="w-4 h-4 text-indigo-400 dark:text-indigo-500 cursor-help" />
-                                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-2 bg-indigo-800 dark:bg-indigo-700 text-white text-[10px] rounded shadow-lg opacity-0 group-hover:opacity-100 focus:opacity-100 group-focus:opacity-100 transition-opacity pointer-events-none z-50">
-                                        Ambient Mode allows the AI to maintain a background presence. When enabled, the AI may send more passive, atmospheric updates or check-ins that feel more natural and less direct than standard proactive messages.
-                                    </div>
-                                </div>
+                            <div>
+                                <label className="text-sm font-medium text-indigo-700 dark:text-indigo-300">Enable Environmental Awareness</label>
+                                <span className="block text-xs text-indigo-500 dark:text-indigo-400">Requires Motion Context toggle to be on.</span>
                             </div>
-                            <button 
-                                onClick={() => setAmbientModeState(!ambientModeState)}
-                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${ambientModeState ? 'bg-indigo-600' : 'bg-indigo-200 dark:bg-indigo-800'}`}
-                            >
-                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${ambientModeState ? 'translate-x-6' : 'translate-x-1'}`} />
+                            <button onClick={() => setEnvAwarenessEnabled(!envAwarenessEnabled)} className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${envAwarenessEnabled ? 'bg-indigo-600' : 'bg-indigo-200 dark:bg-indigo-800'}`}>
+                                <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${envAwarenessEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
                             </button>
                         </div>
-                        {ambientModeState && (
-                            <div className="mt-3">
-                                <label className="block text-xs font-medium text-indigo-700 dark:text-indigo-300 mb-1">Ambient Frequency</label>
-                                <select
-                                    value={ambientFrequencyState}
-                                    onChange={(e) => setAmbientFrequencyState(e.target.value as any)}
-                                    className="w-full p-2 text-sm border border-indigo-300 dark:border-indigo-700 rounded-md bg-white dark:bg-indigo-900 text-indigo-900 dark:text-indigo-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                                >
-                                    <option value="off">Off</option>
-                                    <option value="15m">About every 15 minutes</option>
-                                    <option value="30m">About every 30 minutes</option>
-                                    <option value="45m">About every 45 minutes</option>
-                                    <option value="60m">About every 60 minutes</option>
-                                </select>
+                        {envAwarenessEnabled && (
+                            <div className="space-y-3 pl-1">
+                                <div>
+                                    <label className="block text-xs font-medium text-indigo-700 dark:text-indigo-300 mb-1">Check in after stillness of (minutes)</label>
+                                    <input type="number" min="5" max="120" value={envStillnessMinutes} onChange={(e) => setEnvStillnessMinutes(parseInt(e.target.value) || 20)}
+                                        className="w-full p-2 border border-indigo-300 dark:border-indigo-700 rounded-md bg-white dark:bg-indigo-900 text-indigo-900 dark:text-indigo-100 text-sm focus:ring-2 focus:ring-indigo-500" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-indigo-700 dark:text-indigo-300 mb-1">Minimum gap between messages (minutes)</label>
+                                    <input type="number" min="5" max="180" value={envMinGapMinutes} onChange={(e) => setEnvMinGapMinutes(parseInt(e.target.value) || 30)}
+                                        className="w-full p-2 border border-indigo-300 dark:border-indigo-700 rounded-md bg-white dark:bg-indigo-900 text-indigo-900 dark:text-indigo-100 text-sm focus:ring-2 focus:ring-indigo-500" />
+                                </div>
+                                <div className="flex items-center justify-between">
+                                    <label className="text-xs font-medium text-indigo-700 dark:text-indigo-300">React when movement starts</label>
+                                    <button onClick={() => setEnvMovementResponse(!envMovementResponse)} className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${envMovementResponse ? 'bg-indigo-600' : 'bg-indigo-200 dark:bg-indigo-800'}`}>
+                                        <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 ease-in-out ${envMovementResponse ? 'translate-x-4' : 'translate-x-0'}`} />
+                                    </button>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                    <label className="text-xs font-medium text-indigo-700 dark:text-indigo-300">React to sound changes</label>
+                                    <button onClick={() => setEnvSoundResponse(!envSoundResponse)} className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${envSoundResponse ? 'bg-indigo-600' : 'bg-indigo-200 dark:bg-indigo-800'}`}>
+                                        <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 ease-in-out ${envSoundResponse ? 'translate-x-4' : 'translate-x-0'}`} />
+                                    </button>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                    <label className="text-xs font-medium text-indigo-700 dark:text-indigo-300">React to light changes</label>
+                                    <button onClick={() => setEnvLightResponse(!envLightResponse)} className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${envLightResponse ? 'bg-indigo-600' : 'bg-indigo-200 dark:bg-indigo-800'}`}>
+                                        <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 ease-in-out ${envLightResponse ? 'translate-x-4' : 'translate-x-0'}`} />
+                                    </button>
+                                </div>
                             </div>
                         )}
 
