@@ -151,6 +151,15 @@ interface AppContextType extends AppState {
     orientation: { alpha: number | null; beta: number | null; gamma: number | null };
     acceleration: { x: number | null; y: number | null; z: number | null };
   } | null;
+  environmentalSituation: {
+    situation: string;        // human-readable summary for the AI prompt
+    motionActivity: string;
+    lightLevel: 'bright' | 'dim' | 'dark' | 'unknown';
+    soundLevel: 'loud' | 'moderate' | 'quiet' | 'silent' | 'unknown';
+    stillnessDurationMinutes: number;
+    lastChangeType: 'movement_started' | 'movement_stopped' | 'light_changed' | 'sound_changed' | 'none';
+    timestamp: number;
+  } | null;
   isSuccessfullyLoaded: boolean;
   isLoaded: boolean;
   lastInteractionTime: number;
@@ -324,6 +333,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     speed: number | null;
     orientation: { alpha: number | null; beta: number | null; gamma: number | null };
     acceleration: { x: number | null; y: number | null; z: number | null };
+  } | null>(null);
+  const [environmentalSituation, setEnvironmentalSituation] = useState<{
+    situation: string;
+    motionActivity: string;
+    lightLevel: 'bright' | 'dim' | 'dark' | 'unknown';
+    soundLevel: 'loud' | 'moderate' | 'quiet' | 'silent' | 'unknown';
+    stillnessDurationMinutes: number;
+    lastChangeType: 'movement_started' | 'movement_stopped' | 'light_changed' | 'sound_changed' | 'none';
+    timestamp: number;
   } | null>(null);
   const [isSuccessfullyLoaded, setIsSuccessfullyLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -524,6 +542,144 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => {
       window.removeEventListener('devicemotion', handleMotion);
       window.removeEventListener('deviceorientation', handleOrientation);
+    };
+  }, []);
+
+  // ── Environmental awareness: light + sound + situation classifier ──────────
+  useEffect(() => {
+    // --- Shared state for the classifier ---
+    let motionActivity = 'unknown';
+    let lightLevel: 'bright' | 'dim' | 'dark' | 'unknown' = 'unknown';
+    let soundLevel: 'loud' | 'moderate' | 'quiet' | 'silent' | 'unknown' = 'unknown';
+    let stillnessSince = Date.now();
+    let lastActivity = 'unknown';
+    let lastLight: typeof lightLevel = 'unknown';
+    let lastSound: typeof soundLevel = 'unknown';
+
+    const classifySituation = (changeType: 'movement_started' | 'movement_stopped' | 'light_changed' | 'sound_changed' | 'none') => {
+      const stillMins = (Date.now() - stillnessSince) / 60000;
+      const parts: string[] = [];
+      if (motionActivity !== 'unknown') parts.push(`User is ${motionActivity}`);
+      if (lightLevel !== 'unknown') parts.push(`environment is ${lightLevel}`);
+      if (soundLevel !== 'unknown') parts.push(`ambient sound is ${soundLevel}`);
+      if (stillMins > 1) parts.push(`has been still for ${Math.round(stillMins)} minute${Math.round(stillMins) !== 1 ? 's' : ''}`);
+      setEnvironmentalSituation({
+        situation: parts.length > 0 ? parts.join(', ') + '.' : 'No environmental data available.',
+        motionActivity,
+        lightLevel,
+        soundLevel,
+        stillnessDurationMinutes: Math.round(stillMins * 10) / 10,
+        lastChangeType: changeType,
+        timestamp: Date.now(),
+      });
+    };
+
+    // --- Motion listener (reads from existing devicemotion) ---
+    const handleMotionForEnv = (e: DeviceMotionEvent) => {
+      const a = e.accelerationIncludingGravity;
+      if (!a) return;
+      const mag = Math.sqrt((a.x ?? 0) ** 2 + (a.y ?? 0) ** 2 + (a.z ?? 0) ** 2);
+      const newActivity = mag > 15 ? 'moving vigorously' : mag > 4 ? 'walking or moving' : 'stationary';
+      if (newActivity !== 'stationary') stillnessSince = Date.now();
+      const wasStationary = lastActivity === 'stationary' || lastActivity === 'unknown';
+      const nowMoving = newActivity !== 'stationary';
+      const wasMoving = lastActivity !== 'stationary' && lastActivity !== 'unknown';
+      const nowStationary = newActivity === 'stationary';
+      motionActivity = newActivity;
+      if (wasStationary && nowMoving) {
+        lastActivity = newActivity;
+        classifySituation('movement_started');
+      } else if (wasMoving && nowStationary) {
+        stillnessSince = Date.now();
+        lastActivity = newActivity;
+        classifySituation('movement_stopped');
+      } else {
+        lastActivity = newActivity;
+      }
+    };
+    window.addEventListener('devicemotion', handleMotionForEnv);
+
+    // --- Ambient light via camera luma sampling ---
+    let videoEl: HTMLVideoElement | null = null;
+    let canvasEl: HTMLCanvasElement | null = null;
+    let lightStream: MediaStream | null = null;
+    let lightInterval: ReturnType<typeof setInterval> | null = null;
+
+    const startLightSensor = async () => {
+      try {
+        lightStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: 64, height: 64 } });
+        videoEl = document.createElement('video');
+        canvasEl = document.createElement('canvas');
+        canvasEl.width = 64; canvasEl.height = 64;
+        videoEl.srcObject = lightStream;
+        videoEl.play();
+        lightInterval = setInterval(() => {
+          if (!videoEl || !canvasEl) return;
+          const ctx = canvasEl.getContext('2d');
+          if (!ctx) return;
+          ctx.drawImage(videoEl, 0, 0, 64, 64);
+          const data = ctx.getImageData(0, 0, 64, 64).data;
+          let luma = 0;
+          for (let i = 0; i < data.length; i += 4) {
+            luma += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+          }
+          luma /= (data.length / 4);
+          const newLight: typeof lightLevel = luma > 160 ? 'bright' : luma > 60 ? 'dim' : 'dark';
+          if (newLight !== lastLight) {
+            lightLevel = newLight;
+            lastLight = newLight;
+            classifySituation('light_changed');
+          }
+        }, 5000);
+      } catch {
+        // Camera permission denied or unavailable — light sensing skipped silently
+      }
+    };
+    startLightSensor();
+
+    // --- Sound level via mic amplitude ---
+    let audioCtx: AudioContext | null = null;
+    let analyser: AnalyserNode | null = null;
+    let micStream: MediaStream | null = null;
+    let soundInterval: ReturnType<typeof setInterval> | null = null;
+
+    const startSoundSensor = async () => {
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        audioCtx = new AudioContext();
+        const source = audioCtx.createMediaStreamSource(micStream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        source.connect(analyser);
+        const buf = new Uint8Array(analyser.frequencyBinCount);
+        soundInterval = setInterval(() => {
+          if (!analyser) return;
+          analyser.getByteFrequencyData(buf);
+          const avg = buf.reduce((s, v) => s + v, 0) / buf.length;
+          const newSound: typeof soundLevel = avg > 60 ? 'loud' : avg > 25 ? 'moderate' : avg > 8 ? 'quiet' : 'silent';
+          if (newSound !== lastSound) {
+            soundLevel = newSound;
+            lastSound = newSound;
+            classifySituation('sound_changed');
+          }
+        }, 3000);
+      } catch {
+        // Mic permission denied or unavailable — sound sensing skipped silently
+      }
+    };
+    startSoundSensor();
+
+    // Initial situation snapshot after 3 seconds
+    const initTimer = setTimeout(() => classifySituation('none'), 3000);
+
+    return () => {
+      window.removeEventListener('devicemotion', handleMotionForEnv);
+      clearTimeout(initTimer);
+      if (lightInterval) clearInterval(lightInterval);
+      if (soundInterval) clearInterval(soundInterval);
+      if (lightStream) lightStream.getTracks().forEach(t => t.stop());
+      if (micStream) micStream.getTracks().forEach(t => t.stop());
+      if (audioCtx) audioCtx.close();
     };
   }, []);
 
@@ -1844,6 +2000,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       wavespeedApiKey, setWavespeedApiKey,
       userLocation,
       userMotion,
+      environmentalSituation,
       isLoaded, isSuccessfullyLoaded, lastInteractionTime, setLastInteractionTime,
       userId, setUserId, isSyncing, setIsSyncing,
       exportGalleryData, exportGalleryChunks, importGalleryData, importGalleryChunks, syncGalleryToCloud, restoreGalleryFromCloud,
