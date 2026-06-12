@@ -17,6 +17,7 @@ const ChatManager: React.FC = () => {
     autoJsonBackupInterval,
     exportData,
     fetchWithRetry,
+    environmentalSituation,
   } = useApp();
 
   const { addChatMessage, chatHistory, sessions, activeSessionId } = useChat();
@@ -73,166 +74,122 @@ const ChatManager: React.FC = () => {
   const userIdRef           = React.useRef(userId);
   const anthropicKeyRef     = React.useRef(anthropicApiKey);
   const geminiKeyRef        = React.useRef(geminiApiKey);
+  const envSituationRef     = React.useRef(environmentalSituation);
 
-  useEffect(() => { lastInteractionRef.current  = lastInteractionTime; }, [lastInteractionTime]);
-  useEffect(() => { chatHistoryRef.current       = chatHistory;        }, [chatHistory]);
-  useEffect(() => { aiProfileRef.current         = aiProfile;          }, [aiProfile]);
-  useEffect(() => { userProfileRef.current       = userProfile;        }, [userProfile]);
-  useEffect(() => { userIdRef.current            = userId;             }, [userId]);
-  useEffect(() => { anthropicKeyRef.current      = anthropicApiKey;    }, [anthropicApiKey]);
-  useEffect(() => { geminiKeyRef.current         = geminiApiKey;       }, [geminiApiKey]);
+  useEffect(() => { lastInteractionRef.current  = lastInteractionTime;      }, [lastInteractionTime]);
+  useEffect(() => { chatHistoryRef.current       = chatHistory;              }, [chatHistory]);
+  useEffect(() => { aiProfileRef.current         = aiProfile;                }, [aiProfile]);
+  useEffect(() => { userProfileRef.current       = userProfile;              }, [userProfile]);
+  useEffect(() => { userIdRef.current            = userId;                   }, [userId]);
+  useEffect(() => { anthropicKeyRef.current      = anthropicApiKey;          }, [anthropicApiKey]);
+  useEffect(() => { geminiKeyRef.current         = geminiApiKey;             }, [geminiApiKey]);
+  useEffect(() => { envSituationRef.current      = environmentalSituation;  }, [environmentalSituation]);
 
-  const sessionStartRef         = React.useRef(Date.now());
-  const isProcessingRef         = React.useRef(false);
-  const lastProactiveTriggerRef = React.useRef(0);
-  const lastAmbientTriggerRef   = React.useRef(0);
+  const sessionStartRef       = React.useRef(Date.now());
+  const isProcessingRef       = React.useRef(false);
+  const lastEnvTriggerRef     = React.useRef(0);
+  const lastSituationRef      = React.useRef<string>('');
 
-  const getIntervalMs = (freq: string) => {
-    switch (freq) {
-      // Proactive message intervals
-      case '2h':  return 2  * 60 * 60 * 1000;
-      case '3h':  return 3  * 60 * 60 * 1000;
-      case '5h':  return 5  * 60 * 60 * 1000;
-      case '11h': return 11 * 60 * 60 * 1000;
-      // Legacy values (in case old settings are stored)
-      case '1h':  return 2  * 60 * 60 * 1000;
-      case '6h':  return 5  * 60 * 60 * 1000;
-      case '12h': return 11 * 60 * 60 * 1000;
-      case '24h': return 11 * 60 * 60 * 1000;
-      // Ambient mode intervals
-      case '15m': return 15 * 60 * 1000;
-      case '30m': return 30 * 60 * 1000;
-      case '45m': return 45 * 60 * 1000;
-      case '60m': return 60 * 60 * 1000;
-      default: return Infinity;
-    }
-  };
-
-  // ── Proactive messages (user is AWAY) ──────────────────────────────
+  // ── Environmental awareness engine (replaces proactive + ambient loops) ────
+  // Triggers when the situation classifier detects a meaningful state change
+  // and the persona has environmental awareness enabled.
   useEffect(() => {
-    if (!isLoaded || aiProfile.proactiveMessageFrequency === 'off') return;
-    const interval = getIntervalMs(aiProfile.proactiveMessageFrequency);
-    if (interval === Infinity) return;
+    if (!isLoaded) return;
 
     const check = async () => {
+      const profile = aiProfileRef.current;
+      if (!profile.environmentalAwarenessEnabled) return;
       if (isProcessingRef.current) return;
+
+      const env = envSituationRef.current;
+      if (!env) return;
+
       const now = Date.now();
-      const sinceInteraction = now - lastInteractionRef.current;
-      const sinceSession     = now - sessionStartRef.current;
-      const sinceTrigger     = now - lastProactiveTriggerRef.current;
+      const minGapMs = (profile.envMinGapMinutes ?? 30) * 60 * 1000;
+      const sinceLastTrigger = now - lastEnvTriggerRef.current;
+      const sinceSession = now - sessionStartRef.current;
       const hasUserMsg = chatHistoryRef.current.some(m => m.role === 'user');
 
-      if (
-        sinceInteraction >= interval &&
-        sinceSession     >= 2 * 60 * 1000 && // app open for at least 2 minutes
-        sinceTrigger     >= interval &&
-        hasUserMsg
-      ) {
-        isProcessingRef.current = true;
-        lastProactiveTriggerRef.current = now;
-        try {
-          const res = await fetchWithRetry('/api/proactive-message', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              userId: userIdRef.current,
-              chatHistory: chatHistoryRef.current.slice(-5),
-              aiProfile: aiProfileRef.current,
-              userProfile: userProfileRef.current,
-              anthropicApiKey: anthropicKeyRef.current || undefined,
-              geminiKey: geminiApiKey || undefined,
-              timeZone,
-              type: 'message',
-            }),
-          });
+      if (sinceSession < 60 * 1000) return;  // wait 1 min after session start
+      if (sinceLastTrigger < minGapMs) return;
+      if (!hasUserMsg) return;
 
-          if (res.ok) {
-            const { message } = await res.json();
-            if (message && message !== 'IN_PROGRESS') {
-              addChatMessage({
-                id: `proactive-${Date.now()}`,
-                role: 'model',
-                content: message,
-                timestamp: Date.now(),
-              });
-              // Push notification is sent server-side automatically using
-              // the stored push subscription for this userId.
-            }
-          }
-        } catch (e) {
-          console.error("Proactive message error:", e);
-        } finally {
-          isProcessingRef.current = false;
+      // Decide if this situation warrants a message
+      const shouldTrigger = (() => {
+        const changeType = env.lastChangeType;
+
+        // Sustained stillness check
+        if (profile.envStillnessMinutes && env.stillnessDurationMinutes >= profile.envStillnessMinutes) {
+          return { reason: 'stillness', tone: 'soft' };
         }
+        // Movement started after stillness
+        if (profile.envMovementResponse && changeType === 'movement_started') {
+          return { reason: 'movement_started', tone: 'light' };
+        }
+        // Movement stopped (settled)
+        if (changeType === 'movement_stopped') {
+          return { reason: 'movement_stopped', tone: 'soft' };
+        }
+        // Significant sound change
+        if (profile.envSoundResponse && changeType === 'sound_changed') {
+          return { reason: 'sound_changed', tone: 'curious' };
+        }
+        // Significant light change
+        if (profile.envLightResponse && changeType === 'light_changed') {
+          return { reason: 'light_changed', tone: 'observational' };
+        }
+        return null;
+      })();
+
+      // Avoid re-triggering for the exact same situation description
+      if (!shouldTrigger) return;
+      if (env.situation === lastSituationRef.current) return;
+
+      isProcessingRef.current = true;
+      lastEnvTriggerRef.current = now;
+      lastSituationRef.current = env.situation;
+
+      try {
+        const res = await fetchWithRetry('/api/proactive-message', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: userIdRef.current,
+            chatHistory: chatHistoryRef.current.slice(-5),
+            aiProfile: aiProfileRef.current,
+            userProfile: userProfileRef.current,
+            anthropicApiKey: anthropicKeyRef.current || undefined,
+            geminiKey: geminiKeyRef.current || undefined,
+            timeZone,
+            isAmbient: true,
+            environmentalContext: env.situation,
+            triggerTone: shouldTrigger.tone,
+            triggerReason: shouldTrigger.reason,
+          }),
+        });
+
+        if (res.ok) {
+          const { message } = await res.json();
+          if (message && message !== 'IN_PROGRESS') {
+            addChatMessage({
+              id: `env-${Date.now()}`,
+              role: 'model',
+              content: message,
+              timestamp: Date.now(),
+            });
+          }
+        }
+      } catch (e) {
+        console.error('Environmental awareness trigger error:', e);
+      } finally {
+        isProcessingRef.current = false;
       }
     };
 
-    const id = setInterval(check, 30000);
+    // Check every 60 seconds — the real gating is situation change + min gap
+    const id = setInterval(check, 60 * 1000);
     return () => clearInterval(id);
-  }, [isLoaded, aiProfile.proactiveMessageFrequency]);
-
-  // ── Ambient messages (user is ACTIVE) ─────────────────────────────
-  useEffect(() => {
-    if (!isLoaded || !aiProfile.ambientMode || aiProfile.ambientFrequency === 'off') return;
-    const interval = getIntervalMs(aiProfile.ambientFrequency);
-    if (interval === Infinity) return;
-
-    const check = async () => {
-      if (isProcessingRef.current) return;
-      const now = Date.now();
-      const sinceSession   = now - sessionStartRef.current;
-      const sinceTrigger   = now - lastAmbientTriggerRef.current;
-      const sinceLastMsg   = now - lastInteractionRef.current;
-      const proactiveMs    = getIntervalMs(aiProfileRef.current.proactiveMessageFrequency);
-      const hasUserMsg = chatHistoryRef.current.some(m => m.role === 'user');
-
-      if (
-        sinceSession >= 60 * 1000 &&    // app open for at least 1 minute
-        sinceTrigger >= interval &&
-        sinceLastMsg >= 30000 &&        // at least 30s since last interaction
-        sinceLastMsg <  proactiveMs &&  // but not so long it should be proactive
-        hasUserMsg
-      ) {
-        isProcessingRef.current = true;
-        lastAmbientTriggerRef.current = now;
-        try {
-          const res = await fetchWithRetry('/api/proactive-message', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              userId: userIdRef.current,
-              chatHistory: chatHistoryRef.current.slice(-5),
-              aiProfile: aiProfileRef.current,
-              userProfile: userProfileRef.current,
-              anthropicApiKey: anthropicKeyRef.current || undefined,
-              geminiKey: geminiApiKey || undefined,
-              timeZone,
-              isAmbient: true,
-            }),
-          });
-
-          if (res.ok) {
-            const { message } = await res.json();
-            if (message && message !== 'IN_PROGRESS') {
-              addChatMessage({
-                id: `ambient-${Date.now()}`,
-                role: 'model',
-                content: message,
-                timestamp: Date.now(),
-              });
-            }
-          }
-        } catch (e) {
-          console.error("Ambient message error:", e);
-        } finally {
-          isProcessingRef.current = false;
-        }
-      }
-    };
-
-    const id = setInterval(check, 30000);
-    return () => clearInterval(id);
-  }, [isLoaded, aiProfile.ambientMode, aiProfile.ambientFrequency]);
+  }, [isLoaded]);
 
   return null;
 };
