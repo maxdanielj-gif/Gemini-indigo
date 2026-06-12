@@ -5,6 +5,7 @@ import { onForegroundMessage, requestNotificationPermission } from '../services/
 import { showNativeNotification } from '../services/notificationService';
 import { backupToFirestore, restoreFromFirestore, uploadGalleryToFirebaseStorage, restoreGalleryFromFirebaseStorage, uploadKnowledgeBaseToFirebaseStorage, restoreKnowledgeBaseFromFirebaseStorage, signInWithGoogle as fbSignInWithGoogle, signOutUser as fbSignOutUser, onAuthStateChange, FirebaseUser } from '../services/firebaseService';
 import { AIProfile, UserProfile, ChatMessage, GalleryItem, JournalEntry, Memory, KnowledgeBaseDocument, ChatSession, ProactiveCommunication } from '../types';
+import { memoryService } from '../services/MemoryService';
 
 export interface Toast {
   id: string;
@@ -1792,20 +1793,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       setSavedPersonas(parsed.savedPersonas || [importedProfile]);
       
-      // 2. Restore Chat Data
+      // 2. Restore Chat Data — must go through memoryService (setSessions/setChatHistory are no-ops)
       const importedSessions = parsed.sessions || importedProfile.sessions || [];
       const importedActiveId = parsed.activeSessionId || importedProfile.activeSessionId || (importedSessions.length > 0 ? importedSessions[0].id : null);
-      const importedHistory = parsed.chatHistory || importedProfile.chatHistory || [];
 
-      setSessions(importedSessions);
-      setActiveSessionId(importedActiveId);
-      
-      if (importedActiveId) {
-        const activeSession = importedSessions.find((s: any) => s.id === importedActiveId);
-        setChatHistory(activeSession ? activeSession.messages : importedHistory);
-      } else {
-        setChatHistory(importedHistory);
+      // If backup has no sessions but has legacy flat chatHistory, wrap it into one session
+      let sessionsToRestore = importedSessions;
+      if (sessionsToRestore.length === 0 && (parsed.chatHistory || importedProfile.chatHistory)) {
+        const legacyHistory = parsed.chatHistory || importedProfile.chatHistory || [];
+        if (legacyHistory.length > 0) {
+          sessionsToRestore = [{
+            id: 'restored-' + Date.now(),
+            title: 'Restored Chat',
+            messages: legacyHistory,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          }];
+        }
       }
+
+      // Restore sessions into MemoryService (the actual store — setSessions is a no-op)
+      memoryService.restoreSessions(sessionsToRestore, importedActiveId).catch(e =>
+        console.error('Failed to restore sessions into MemoryService:', e)
+      );
 
       // 3. Restore Other App State
       setUserProfileState(parsed.userProfile || userProfile);
