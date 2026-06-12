@@ -139,6 +139,7 @@ const AIProfileScreen: React.FC = () => {
   const [envLightResponse, setEnvLightResponse] = useState<boolean>(aiProfile.envLightResponse ?? false);
   const [envMinGapMinutes, setEnvMinGapMinutes] = useState<number>(aiProfile.envMinGapMinutes ?? 30);
   const [envMinGapInput, setEnvMinGapInput] = useState<string>(String(aiProfile.envMinGapMinutes ?? 30));
+  const [aiInitiatedMessagesEnabled, setAiInitiatedMessagesEnabled] = useState<boolean>(aiProfile.aiInitiatedMessagesEnabled ?? true);
   const [imageStyle, setImageStyle] = useState<string>(aiProfile.imageStyle || 'none');
   const [imageGenerationInstructions, setImageGenerationInstructions] = useState<string[]>(aiProfile.imageGenerationInstructions || []);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
@@ -291,6 +292,7 @@ const AIProfileScreen: React.FC = () => {
     setTimeAwareness(aiProfile.timeAwareness !== undefined ? aiProfile.timeAwareness : true);
     setAmbientModeState(aiProfile.ambientMode ?? false);
     setAmbientFrequencyState(aiProfile.ambientFrequency || 'off');
+    setAiInitiatedMessagesEnabled(aiProfile.aiInitiatedMessagesEnabled ?? true);
     setEnvAwarenessEnabled(aiProfile.environmentalAwarenessEnabled || false);
     setEnvStillnessMinutes(aiProfile.envStillnessMinutes ?? 20);
     setEnvStillnessInput(String(aiProfile.envStillnessMinutes ?? 20));
@@ -341,6 +343,7 @@ const AIProfileScreen: React.FC = () => {
       customParagraphCount,
       customWordCount,
       proactiveMessageFrequency,
+      aiInitiatedMessagesEnabled,
       environmentalAwarenessEnabled: envAwarenessEnabled,
       envStillnessMinutes,
       envMovementResponse,
@@ -415,6 +418,7 @@ const AIProfileScreen: React.FC = () => {
       customParagraphCount,
       customWordCount,
       proactiveMessageFrequency: proactiveMessageFrequency,
+      aiInitiatedMessagesEnabled,
       environmentalAwarenessEnabled: envAwarenessEnabled,
       envStillnessMinutes,
       envMovementResponse,
@@ -510,6 +514,7 @@ const AIProfileScreen: React.FC = () => {
         aiCanUseYouTube: false,
         aiCanUseGoogleMaps: false,
         googleToolsEnabled: false,
+        aiInitiatedMessagesEnabled: true,
         aiCanUseMotion: false,
         aiCanBrowse: false,
         chatHistory: [],
@@ -1045,6 +1050,18 @@ const AIProfileScreen: React.FC = () => {
                 </div>
 
                 <div className="border-t border-indigo-100 dark:border-indigo-800 pt-4">
+                    <div className="flex items-center justify-between mb-4">
+                        <div>
+                            <h3 className="text-sm font-semibold text-indigo-900 dark:text-indigo-100">AI-Initiated Messages</h3>
+                            <p className="text-xs text-indigo-500 dark:text-indigo-400 mt-0.5">Master switch — turn off to silence all unprompted messages without changing your settings.</p>
+                        </div>
+                        <button onClick={() => setAiInitiatedMessagesEnabled(!aiInitiatedMessagesEnabled)} className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${aiInitiatedMessagesEnabled ? 'bg-indigo-600' : 'bg-red-400'}`}>
+                            <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${aiInitiatedMessagesEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                        </button>
+                    </div>
+                </div>
+
+                <div className="border-t border-indigo-100 dark:border-indigo-800 pt-4">
                     <h3 className="text-sm font-semibold text-indigo-900 dark:text-indigo-100 mb-3">Environmental Awareness</h3>
                     <p className="text-xs text-indigo-500 dark:text-indigo-400 mb-4">The AI notices changes in your environment and reaches out naturally — when you've been still a while, when you start moving, or when the light or sound around you shifts.</p>
                     <div className="space-y-4">
@@ -1199,6 +1216,15 @@ const AIProfileScreen: React.FC = () => {
                                 className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${timeAwareness ? 'bg-indigo-600' : 'bg-indigo-200 dark:bg-indigo-800'}`}
                             >
                                 <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${timeAwareness ? 'translate-x-5' : 'translate-x-0'}`} />
+                            </button>
+                        </div>
+                        <div className="flex items-center justify-between mt-4">
+                            <div>
+                                <label className="text-sm font-medium text-indigo-700 dark:text-indigo-300">Image Generation</label>
+                                <span className="block text-xs text-indigo-500 dark:text-indigo-400">Enable the image generation screen and allow the AI to generate images.</span>
+                            </div>
+                            <button onClick={() => setAIProfile({ ...aiProfile, aiCanGenerateImages: !aiProfile.aiCanGenerateImages })} className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${aiProfile.aiCanGenerateImages ? 'bg-indigo-600' : 'bg-indigo-200 dark:bg-indigo-800'}`}>
+                                <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${aiProfile.aiCanGenerateImages ? 'translate-x-5' : 'translate-x-0'}`} />
                             </button>
                         </div>
                         <div className="flex items-center justify-between mt-4">
