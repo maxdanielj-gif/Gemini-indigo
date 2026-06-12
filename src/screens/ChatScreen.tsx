@@ -14,7 +14,7 @@ const ChatScreen: React.FC = () => {
   const { 
     aiProfile, userProfile, knowledgeBase, 
     addToKnowledgeBase, addToGallery, apiKey,
-    anthropicApiKey, geminiApiKey, elevenLabsApiKey, userLocation,
+    anthropicApiKey, geminiApiKey, elevenLabsApiKey, userLocation, userMotion,
     memories, journal, 
     addJournalEntry, addMemory, showTimestamps, timeZone, addToast,
     setAIProfile, setLastInteractionTime
@@ -446,6 +446,7 @@ const ChatScreen: React.FC = () => {
           attachments: attachments.length > 0 ? attachments : undefined,
           timeZone,
           userLocation: userLocation || undefined,
+          userMotion: (aiProfile.aiCanUseMotion && userMotion) ? userMotion : undefined,
           memories: memories.length > 0 ? memories : undefined,
           journal: journal.length > 0 ? journal.slice(-3) : undefined,
           knowledgeBase: knowledgeBase.length > 0 ? knowledgeBase : undefined,

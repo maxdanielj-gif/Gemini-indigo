@@ -61,6 +61,7 @@ const AIProfileScreen: React.FC = () => {
   const [availableBlogs, setAvailableBlogs] = useState<{id: string, name: string}[]>([]);
   const [isFetchingBlogs, setIsFetchingBlogs] = useState(false);
   const [googleToolsEnabled, setGoogleToolsEnabled] = useState<boolean>(aiProfile.googleToolsEnabled || false);
+  const [aiCanUseMotion, setAiCanUseMotion] = useState<boolean>(aiProfile.aiCanUseMotion || false);
   const [aiCanUseWebSearch, setAiCanUseWebSearch] = useState<boolean>(aiProfile.aiCanUseWebSearch || false);
   const [aiCanUseWeather, setAiCanUseWeather] = useState<boolean>(aiProfile.aiCanUseWeather || false);
   const [aiCanUseCalendar, setAiCanUseCalendar] = useState<boolean>(aiProfile.aiCanUseCalendar || false);
@@ -235,6 +236,7 @@ const AIProfileScreen: React.FC = () => {
     setSpeakingStyle(aiProfile.speakingStyle || '');
     setProactiveMessageFrequency(aiProfile.proactiveMessageFrequency || 'off');
     setGoogleToolsEnabled(aiProfile.googleToolsEnabled || false);
+    setAiCanUseMotion(aiProfile.aiCanUseMotion || false);
     setAiCanGenerateSpeech(aiProfile.aiCanGenerateSpeech ?? true);
     setTextOnlyMode(aiProfile.textOnlyMode ?? false);
     setElevenLabsModelId(aiProfile.elevenLabsModelId || 'eleven_v3');
@@ -310,6 +312,7 @@ const AIProfileScreen: React.FC = () => {
       aiCanUseYouTube: aiProfile.aiCanUseYouTube,
       aiCanUseGoogleMaps,
       googleToolsEnabled,
+      aiCanUseMotion,
       imageStyle,
       imageGenerationInstructions,
       aiCanGenerateSpeech,
@@ -376,6 +379,7 @@ const AIProfileScreen: React.FC = () => {
       aiCanUseYouTube: aiProfile.aiCanUseYouTube,
       aiCanUseGoogleMaps,
       googleToolsEnabled,
+      aiCanUseMotion,
       imageStyle,
       imageGenerationInstructions,
       aiCanGenerateSpeech,
@@ -450,6 +454,7 @@ const AIProfileScreen: React.FC = () => {
         aiCanUseYouTube: false,
         aiCanUseGoogleMaps: false,
         googleToolsEnabled: false,
+        aiCanUseMotion: false,
         aiCanBrowse: false,
         chatHistory: [],
         memories: [],
@@ -1184,6 +1189,15 @@ const AIProfileScreen: React.FC = () => {
                             </div>
                             <button onClick={() => setAiCanUseGoogleMaps(!aiCanUseGoogleMaps)} className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${aiCanUseGoogleMaps ? 'bg-indigo-600' : 'bg-indigo-200 dark:bg-indigo-800'}`}>
                                 <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${aiCanUseGoogleMaps ? 'translate-x-5' : 'translate-x-0'}`} />
+                            </button>
+                        </div>
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <label className="text-sm font-medium text-indigo-700 dark:text-indigo-300">Motion Context</label>
+                                <span className="block text-xs text-indigo-500 dark:text-indigo-400">Share device motion and orientation so the AI knows if you're walking, stationary, etc.</span>
+                            </div>
+                            <button onClick={() => setAiCanUseMotion(!aiCanUseMotion)} className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${aiCanUseMotion ? 'bg-indigo-600' : 'bg-indigo-200 dark:bg-indigo-800'}`}>
+                                <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${aiCanUseMotion ? 'translate-x-5' : 'translate-x-0'}`} />
                             </button>
                         </div>
 
