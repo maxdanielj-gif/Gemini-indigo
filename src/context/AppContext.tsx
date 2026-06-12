@@ -145,6 +145,12 @@ interface AppContextType extends AppState {
     messagingSenderId?: string | null;
   }) => void;
   userLocation: { lat: number; lon: number; label: string } | null;
+  userMotion: {
+    activity: string;
+    speed: number | null;
+    orientation: { alpha: number | null; beta: number | null; gamma: number | null };
+    acceleration: { x: number | null; y: number | null; z: number | null };
+  } | null;
   isSuccessfullyLoaded: boolean;
   isLoaded: boolean;
   lastInteractionTime: number;
@@ -313,6 +319,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [isLoaded, setIsLoaded] = useState(false);
   const [userLocation, setUserLocation] = useState<{ lat: number; lon: number; label: string } | null>(null);
+  const [userMotion, setUserMotion] = useState<{
+    activity: string;
+    speed: number | null;
+    orientation: { alpha: number | null; beta: number | null; gamma: number | null };
+    acceleration: { x: number | null; y: number | null; z: number | null };
+  } | null>(null);
   const [isSuccessfullyLoaded, setIsSuccessfullyLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showResetOption, setShowResetOption] = useState(false);
@@ -445,6 +457,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       },
       () => { /* permission denied — silently skip */ }
     );
+  }, []);
+
+  // ── Motion sensors: DeviceMotion + DeviceOrientation ─────────────────────
+  useEffect(() => {
+    let latestAccel = { x: null as number | null, y: null as number | null, z: null as number | null };
+    let latestOrientation = { alpha: null as number | null, beta: null as number | null, gamma: null as number | null };
+    let latestSpeed = null as number | null;
+
+    const classifyActivity = (
+      accel: { x: number | null; y: number | null; z: number | null },
+      speed: number | null
+    ): string => {
+      const x = accel.x ?? 0;
+      const y = accel.y ?? 0;
+      const z = accel.z ?? 0;
+      const magnitude = Math.sqrt(x * x + y * y + z * z);
+      if (speed !== null && speed > 5) return 'in a vehicle';
+      if (magnitude > 15) return 'moving vigorously';
+      if (magnitude > 4) return 'walking or moving';
+      return 'stationary or resting';
+    };
+
+    const updateMotion = () => {
+      setUserMotion({
+        activity: classifyActivity(latestAccel, latestSpeed),
+        speed: latestSpeed !== null ? Math.round(latestSpeed * 10) / 10 : null,
+        orientation: {
+          alpha: latestOrientation.alpha !== null ? Math.round(latestOrientation.alpha) : null,
+          beta: latestOrientation.beta !== null ? Math.round(latestOrientation.beta) : null,
+          gamma: latestOrientation.gamma !== null ? Math.round(latestOrientation.gamma) : null,
+        },
+        acceleration: {
+          x: latestAccel.x !== null ? Math.round(latestAccel.x * 100) / 100 : null,
+          y: latestAccel.y !== null ? Math.round(latestAccel.y * 100) / 100 : null,
+          z: latestAccel.z !== null ? Math.round(latestAccel.z * 100) / 100 : null,
+        },
+      });
+    };
+
+    const handleMotion = (e: DeviceMotionEvent) => {
+      const a = e.accelerationIncludingGravity;
+      if (a) {
+        latestAccel = { x: a.x ?? null, y: a.y ?? null, z: a.z ?? null };
+      }
+      updateMotion();
+    };
+
+    const handleOrientation = (e: DeviceOrientationEvent) => {
+      latestOrientation = { alpha: e.alpha, beta: e.beta, gamma: e.gamma };
+      updateMotion();
+    };
+
+    // Use GPS speed if location is available for better vehicle detection
+    if (navigator.geolocation) {
+      navigator.geolocation.watchPosition(
+        (pos) => { latestSpeed = pos.coords.speed; updateMotion(); },
+        () => {},
+        { enableHighAccuracy: false }
+      );
+    }
+
+    window.addEventListener('devicemotion', handleMotion);
+    window.addEventListener('deviceorientation', handleOrientation);
+
+    return () => {
+      window.removeEventListener('devicemotion', handleMotion);
+      window.removeEventListener('deviceorientation', handleOrientation);
+    };
   }, []);
 
 
@@ -1763,6 +1843,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       geminiApiKey, setGeminiApiKey,
       wavespeedApiKey, setWavespeedApiKey,
       userLocation,
+      userMotion,
       isLoaded, isSuccessfullyLoaded, lastInteractionTime, setLastInteractionTime,
       userId, setUserId, isSyncing, setIsSyncing,
       exportGalleryData, exportGalleryChunks, importGalleryData, importGalleryChunks, syncGalleryToCloud, restoreGalleryFromCloud,
