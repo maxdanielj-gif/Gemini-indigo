@@ -50,16 +50,25 @@ const ChatManager: React.FC = () => {
     analyzePersona();
   }, [chatHistory.length]);
 
-  // ── Auto JSON backup ────────────────────────────────────────────────
+  // ── Auto JSON backup — actually downloads a file ──────────────────
   useEffect(() => {
     if (!isLoaded || !autoJsonBackup || autoJsonBackupInterval <= 0) return;
 
     const id = setInterval(async () => {
       try {
-        await exportData(chatHistory, sessions, activeSessionId);
-        console.log("Auto JSON backup triggered");
+        const data = await exportData(chatHistory, sessions, activeSessionId);
+        const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const ts = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+        a.download = `indigo_auto_backup_${ts}.json`;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+        console.log('Auto JSON backup downloaded');
       } catch (e) {
-        console.error("Auto JSON backup failed:", e);
+        console.error('Auto JSON backup failed:', e);
       }
     }, autoJsonBackupInterval * 60 * 1000);
 
