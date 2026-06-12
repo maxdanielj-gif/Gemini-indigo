@@ -906,6 +906,12 @@ app.post("/api/chat", async (req, res) => {
 
   // Location + live weather — fetched from Open-Meteo if the client sent coordinates
   const userLocation = req.body.userLocation as { lat: number; lon: number; label: string } | undefined;
+  const userMotion = req.body.userMotion as {
+    activity: string;
+    speed: number | null;
+    orientation: { alpha: number | null; beta: number | null; gamma: number | null };
+    acceleration: { x: number | null; y: number | null; z: number | null };
+  } | undefined;
   let locationNote = '';
   
   if (userProfile?.locationOverride) {
@@ -926,6 +932,20 @@ app.post("/api/chat", async (req, res) => {
     if (nearby) {
       locationNote += `\n[System: ${nearby}]`;
     }
+  }
+
+  if (aiProfile.aiCanUseMotion && userMotion) {
+    const { activity, speed, orientation, acceleration } = userMotion;
+    const parts: string[] = [`User activity: ${activity}.`];
+    if (speed !== null) parts.push(`GPS speed: ${speed} m/s.`);
+    if (orientation.beta !== null && orientation.gamma !== null) {
+      const tilt = orientation.beta > 45 ? 'held upright' : orientation.beta < -20 ? 'face down' : 'roughly flat';
+      parts.push(`Device tilt: ${tilt} (beta ${orientation.beta}°, gamma ${orientation.gamma}°).`);
+    }
+    if (acceleration.x !== null) {
+      parts.push(`Acceleration: x=${acceleration.x}, y=${acceleration.y}, z=${acceleration.z} m/s².`);
+    }
+    locationNote += `\n[System: Motion context — ${parts.join(' ')}]`;
   }
 
   const systemPrompt = [baseSystemPrompt, providerNote, locationNote, googleToolsContext].filter(Boolean).join('\n\n');
