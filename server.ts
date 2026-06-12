@@ -49,11 +49,12 @@ async function fetchWeather(lat: number, lon: number): Promise<string> {
   } catch {
     return '';
   }
+}
+
 
 // ── Nearby places helper (OpenStreetMap Overpass, no API key required) ───────
 async function fetchNearbyPlaces(lat: number, lon: number): Promise<string> {
   try {
-    // Overpass query: fetch named amenities and shops within 500m
     const radius = 500;
     const query = `
       [out:json][timeout:8];
@@ -73,8 +74,6 @@ async function fetchNearbyPlaces(lat: number, lon: number): Promise<string> {
     if (!res.ok) return '';
     const data = await res.json() as any;
     const elements: any[] = data.elements || [];
-
-    // Build a readable list of nearby places grouped by type
     const places: string[] = [];
     for (const el of elements) {
       const name = el.tags?.name;
@@ -82,9 +81,7 @@ async function fetchNearbyPlaces(lat: number, lon: number): Promise<string> {
       const type = el.tags?.amenity || el.tags?.shop || el.tags?.leisure || el.tags?.tourism || 'place';
       places.push(`${name} (${type})`);
     }
-
     if (places.length === 0) return '';
-    // Deduplicate and cap at 20 entries to keep prompt concise
     const unique = [...new Set(places)].slice(0, 20);
     return `Nearby places within ~500m: ${unique.join(', ')}.`;
   } catch {
@@ -874,9 +871,6 @@ app.post("/api/chat", async (req, res) => {
   const useGemini = isGeminiModel(selectedModel);
 
   // ── Google Tools: background Gemini web search context for Claude ──────────
-  // When the Google Tools toggle is on and Claude is handling the chat, we
-  // silently call a cheap Gemini model to do a grounded web search first,
-  // then inject that real-time context into Claude's system prompt.
   let googleToolsContext = '';
   if (aiProfile.googleToolsEnabled && !useGemini && currentUserMessage.trim()) {
     try {
@@ -895,12 +889,12 @@ app.post("/api/chat", async (req, res) => {
           const groundingData = await groundingRes.json();
           const groundingText = groundingData.candidates?.[0]?.content?.parts?.[0]?.text || '';
           if (groundingText.trim()) {
-            googleToolsContext = `\n\n[Google Search Context — use this real-time information to inform your response if relevant]:\n${groundingText}`;
+            googleToolsContext = `\n\n[Google Search Context]:\n${groundingText}`;
           }
         }
       }
     } catch (e: any) {
-      console.warn('[Google Tools] Background grounding failed (non-fatal):', e.message);
+      console.warn('[Google Tools] failed:', e.message);
     }
   }
 
