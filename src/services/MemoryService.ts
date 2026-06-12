@@ -181,6 +181,22 @@ class MemoryService {
       this.notify();
     }
   }
+
+  // Restore sessions from a backup (used by importData in AppContext)
+  public async restoreSessions(sessions: ChatSession[], activeSessionId: string | null) {
+    // Clear existing session records from IndexedDB
+    for (const s of this.sessions) {
+      deleteFromDB(`${STORAGE_KEYS.PREFIX}${s.id}`).catch(() => {});
+    }
+    this.sessions = sessions.length > 0 ? sessions : [];
+    this.activeSessionId = activeSessionId || (sessions.length > 0 ? sessions[0].id : null);
+    if (this.sessions.length === 0) {
+      this.createNewSession('Chat');
+    } else {
+      await this.persist();
+      this.notify();
+    }
+  }
 }
 
 export const memoryService = new MemoryService();
