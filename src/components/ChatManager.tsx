@@ -107,6 +107,7 @@ const ChatManager: React.FC = () => {
 
     const check = async () => {
       const profile = aiProfileRef.current;
+      if (profile.aiInitiatedMessagesEnabled === false) return;
       if (!profile.environmentalAwarenessEnabled) return;
       if (isProcessingRef.current) return;
 
