@@ -62,6 +62,33 @@ const AIProfileScreen: React.FC = () => {
   const [isFetchingBlogs, setIsFetchingBlogs] = useState(false);
   const [googleToolsEnabled, setGoogleToolsEnabled] = useState<boolean>(aiProfile.googleToolsEnabled || false);
   const [aiCanUseMotion, setAiCanUseMotion] = useState<boolean>(aiProfile.aiCanUseMotion || false);
+
+  const handleMotionToggle = () => {
+    if (aiCanUseMotion) {
+      // Turning off — just do it
+      setAiCanUseMotion(false);
+      return;
+    }
+    // Turning on — test the sensor first
+    addToast({ title: 'Motion Context', message: 'Checking motion sensors...', type: 'info' });
+    let received = false;
+    const testHandler = (e: DeviceMotionEvent) => {
+      const a = e.accelerationIncludingGravity;
+      if (a && (a.x !== null || a.y !== null || a.z !== null)) {
+        received = true;
+      }
+    };
+    window.addEventListener('devicemotion', testHandler);
+    setTimeout(() => {
+      window.removeEventListener('devicemotion', testHandler);
+      if (received) {
+        setAiCanUseMotion(true);
+        addToast({ title: 'Motion Context', message: 'Motion sensors active — context will be shared with the AI.', type: 'success' });
+      } else {
+        addToast({ title: 'Motion Context', message: 'No motion data detected. Your device or browser may not support this.', type: 'error' });
+      }
+    }, 2000);
+  };
   const [aiCanUseWebSearch, setAiCanUseWebSearch] = useState<boolean>(aiProfile.aiCanUseWebSearch || false);
   const [aiCanUseWeather, setAiCanUseWeather] = useState<boolean>(aiProfile.aiCanUseWeather || false);
   const [aiCanUseCalendar, setAiCanUseCalendar] = useState<boolean>(aiProfile.aiCanUseCalendar || false);
@@ -1196,7 +1223,7 @@ const AIProfileScreen: React.FC = () => {
                                 <label className="text-sm font-medium text-indigo-700 dark:text-indigo-300">Motion Context</label>
                                 <span className="block text-xs text-indigo-500 dark:text-indigo-400">Share device motion and orientation so the AI knows if you're walking, stationary, etc.</span>
                             </div>
-                            <button onClick={() => setAiCanUseMotion(!aiCanUseMotion)} className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${aiCanUseMotion ? 'bg-indigo-600' : 'bg-indigo-200 dark:bg-indigo-800'}`}>
+                            <button onClick={handleMotionToggle} className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${aiCanUseMotion ? 'bg-indigo-600' : 'bg-indigo-200 dark:bg-indigo-800'}`}>
                                 <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${aiCanUseMotion ? 'translate-x-5' : 'translate-x-0'}`} />
                             </button>
                         </div>
