@@ -133,10 +133,12 @@ const AIProfileScreen: React.FC = () => {
   // Environmental awareness state
   const [envAwarenessEnabled, setEnvAwarenessEnabled] = useState<boolean>(aiProfile.environmentalAwarenessEnabled || false);
   const [envStillnessMinutes, setEnvStillnessMinutes] = useState<number>(aiProfile.envStillnessMinutes ?? 20);
+  const [envStillnessInput, setEnvStillnessInput] = useState<string>(String(aiProfile.envStillnessMinutes ?? 20));
   const [envMovementResponse, setEnvMovementResponse] = useState<boolean>(aiProfile.envMovementResponse ?? true);
   const [envSoundResponse, setEnvSoundResponse] = useState<boolean>(aiProfile.envSoundResponse ?? false);
   const [envLightResponse, setEnvLightResponse] = useState<boolean>(aiProfile.envLightResponse ?? false);
   const [envMinGapMinutes, setEnvMinGapMinutes] = useState<number>(aiProfile.envMinGapMinutes ?? 30);
+  const [envMinGapInput, setEnvMinGapInput] = useState<string>(String(aiProfile.envMinGapMinutes ?? 30));
   const [imageStyle, setImageStyle] = useState<string>(aiProfile.imageStyle || 'none');
   const [imageGenerationInstructions, setImageGenerationInstructions] = useState<string[]>(aiProfile.imageGenerationInstructions || []);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
@@ -291,10 +293,12 @@ const AIProfileScreen: React.FC = () => {
     setAmbientFrequencyState(aiProfile.ambientFrequency || 'off');
     setEnvAwarenessEnabled(aiProfile.environmentalAwarenessEnabled || false);
     setEnvStillnessMinutes(aiProfile.envStillnessMinutes ?? 20);
+    setEnvStillnessInput(String(aiProfile.envStillnessMinutes ?? 20));
     setEnvMovementResponse(aiProfile.envMovementResponse ?? true);
     setEnvSoundResponse(aiProfile.envSoundResponse ?? false);
     setEnvLightResponse(aiProfile.envLightResponse ?? false);
     setEnvMinGapMinutes(aiProfile.envMinGapMinutes ?? 30);
+    setEnvMinGapInput(String(aiProfile.envMinGapMinutes ?? 30));
     setImageStyle(aiProfile.imageStyle || 'none');
     setImageGenerationInstructions(aiProfile.imageGenerationInstructions || []);
   }, [aiProfile]);
@@ -1057,12 +1061,24 @@ const AIProfileScreen: React.FC = () => {
                             <div className="space-y-3 pl-1">
                                 <div>
                                     <label className="block text-xs font-medium text-indigo-700 dark:text-indigo-300 mb-1">Check in after stillness of (minutes)</label>
-                                    <input type="number" min="5" max="120" value={envStillnessMinutes} onChange={(e) => setEnvStillnessMinutes(parseInt(e.target.value) || 20)}
+                                    <input type="number" min="5" max="120" value={envStillnessInput}
+                                        onChange={(e) => setEnvStillnessInput(e.target.value)}
+                                        onBlur={(e) => {
+                                          const v = Math.max(5, Math.min(120, parseInt(e.target.value) || 20));
+                                          setEnvStillnessMinutes(v);
+                                          setEnvStillnessInput(String(v));
+                                        }}
                                         className="w-full p-2 border border-indigo-300 dark:border-indigo-700 rounded-md bg-white dark:bg-indigo-900 text-indigo-900 dark:text-indigo-100 text-sm focus:ring-2 focus:ring-indigo-500" />
                                 </div>
                                 <div>
                                     <label className="block text-xs font-medium text-indigo-700 dark:text-indigo-300 mb-1">Minimum gap between messages (minutes)</label>
-                                    <input type="number" min="5" max="180" value={envMinGapMinutes} onChange={(e) => setEnvMinGapMinutes(parseInt(e.target.value) || 30)}
+                                    <input type="number" min="5" max="180" value={envMinGapInput}
+                                        onChange={(e) => setEnvMinGapInput(e.target.value)}
+                                        onBlur={(e) => {
+                                          const v = Math.max(5, Math.min(180, parseInt(e.target.value) || 30));
+                                          setEnvMinGapMinutes(v);
+                                          setEnvMinGapInput(String(v));
+                                        }}
                                         className="w-full p-2 border border-indigo-300 dark:border-indigo-700 rounded-md bg-white dark:bg-indigo-900 text-indigo-900 dark:text-indigo-100 text-sm focus:ring-2 focus:ring-indigo-500" />
                                 </div>
                                 <div className="flex items-center justify-between">
