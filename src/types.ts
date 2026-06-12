@@ -35,7 +35,15 @@ export interface AIProfile {
   responseTone: 'friendly' | 'formal' | 'humorous' | 'serious';
   customParagraphCount: number | null;
   customWordCount: number | null;
-  proactiveMessageFrequency: 'off' | '1h' | '6h' | '12h' | '24h' | 'low' | 'medium' | 'high';
+  // Environmental awareness (replaces old proactive + ambient frequency fields)
+  environmentalAwarenessEnabled?: boolean;
+  envStillnessMinutes?: number;       // minutes of stillness before a check-in (default 20)
+  envMovementResponse?: boolean;      // react when movement is detected after stillness
+  envSoundResponse?: boolean;         // react to significant sound changes
+  envLightResponse?: boolean;         // react to significant light changes
+  envMinGapMinutes?: number;          // minimum minutes between any AI-initiated messages (default 30)
+  // Legacy — kept so old saved personas load without errors
+  proactiveMessageFrequency?: 'off' | '1h' | '6h' | '12h' | '24h' | 'low' | 'medium' | 'high';
   aiCanGenerateSpeech?: boolean;
   textOnlyMode?: boolean;  // When true: no *actions* or roleplay emotes — clean text for TTS
   elevenLabsModelId?: string; // ElevenLabs model to use for TTS
