@@ -49,6 +49,47 @@ async function fetchWeather(lat: number, lon: number): Promise<string> {
   } catch {
     return '';
   }
+
+// ── Nearby places helper (OpenStreetMap Overpass, no API key required) ───────
+async function fetchNearbyPlaces(lat: number, lon: number): Promise<string> {
+  try {
+    // Overpass query: fetch named amenities and shops within 500m
+    const radius = 500;
+    const query = `
+      [out:json][timeout:8];
+      (
+        node["amenity"](around:${radius},${lat},${lon});
+        node["shop"](around:${radius},${lat},${lon});
+        node["leisure"](around:${radius},${lat},${lon});
+        node["tourism"](around:${radius},${lat},${lon});
+      );
+      out body 30;
+    `;
+    const res = await fetch('https://overpass-api.de/api/interpreter', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `data=${encodeURIComponent(query)}`,
+    });
+    if (!res.ok) return '';
+    const data = await res.json() as any;
+    const elements: any[] = data.elements || [];
+
+    // Build a readable list of nearby places grouped by type
+    const places: string[] = [];
+    for (const el of elements) {
+      const name = el.tags?.name;
+      if (!name) continue;
+      const type = el.tags?.amenity || el.tags?.shop || el.tags?.leisure || el.tags?.tourism || 'place';
+      places.push(`${name} (${type})`);
+    }
+
+    if (places.length === 0) return '';
+    // Deduplicate and cap at 20 entries to keep prompt concise
+    const unique = [...new Set(places)].slice(0, 20);
+    return `Nearby places within ~500m: ${unique.join(', ')}.`;
+  } catch {
+    return '';
+  }
 }
 
 // CJS-safe directory resolution (works after esbuild compiles to .cjs)
@@ -883,6 +924,13 @@ app.post("/api/chat", async (req, res) => {
     const weather = await fetchWeather(userLocation.lat, userLocation.lon);
     if (weather) {
        locationNote += `\n[System: Current weather at user's location: ${weather}.]`;
+    }
+  }
+
+  if (aiProfile.aiCanUseGoogleMaps && userLocation?.lat && userLocation?.lon) {
+    const nearby = await fetchNearbyPlaces(userLocation.lat, userLocation.lon);
+    if (nearby) {
+      locationNote += `\n[System: ${nearby}]`;
     }
   }
 
