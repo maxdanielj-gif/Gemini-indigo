@@ -63,6 +63,7 @@ export interface AIProfile {
   aiCanUseYouTube?: boolean;
   aiCanUseGoogleMaps?: boolean;
   googleToolsEnabled?: boolean;   // Master toggle: run Gemini web search even when Claude is active
+  aiCanUseMotion?: boolean;        // Share device motion/orientation context with the AI
   aiCanSendProactiveEmails?: boolean;
   aiCanBrowse?: boolean;
   aiCanUseTools?: boolean;
