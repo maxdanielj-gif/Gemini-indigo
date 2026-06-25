@@ -1255,13 +1255,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 2. Find and load the new persona
     const persona = savedPersonas.find(p => p.id === id);
     if (persona) {
-        // Switch MemoryService to this persona's session context
-        // This filters the session list and active session to only show this persona's chats
-        const personaActiveId = persona.activeSessionId || null;
-        memoryService.switchToPersona(persona.id, personaActiveId);
+        // Update all active states to the new persona's data
+        const personaSessions = persona.sessions || [];
+        const personaActiveId = persona.activeSessionId || (personaSessions.length > 0 ? personaSessions[0].id : null);
+        
+        if (personaSessions.length === 0) {
+            // Create a default session if none exist
+            const defaultSession: ChatSession = {
+                id: 'session-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
+                title: 'New Chat',
+                messages: persona.chatHistory || [],
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+            };
+            setSessions([defaultSession]);
+            setActiveSessionId(defaultSession.id);
+            setChatHistory(defaultSession.messages);
+        } else {
+            setSessions(personaSessions);
+            setActiveSessionId(personaActiveId);
+            const activeSession = personaSessions.find(s => s.id === personaActiveId);
+            setChatHistory(activeSession ? activeSession.messages : []);
+        }
 
         setMemories(persona.memories || []);
         setJournal(persona.journal || []);
+        // Knowledge base switch: filter to this persona's docs (or legacy untagged docs if none exist)
+        // We don't wipe the KB array — personaId filtering happens at read time
         setAIProfileState({
           ...persona,
           imageGenerationInstructions: persona.imageGenerationInstructions !== undefined ? persona.imageGenerationInstructions : initialAIProfileState.imageGenerationInstructions
@@ -1327,11 +1347,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const addToKnowledgeBase = (file: { name: string; content: string }) => {
-    setKnowledgeBase(prev => [...prev, file]);
+    setKnowledgeBase(prev => [...prev, { ...file, personaId: aiProfile.id }]);
   };
 
   const addMultipleToKnowledgeBase = (files: { name: string; content: string }[]) => {
-    setKnowledgeBase(prev => [...prev, ...files]);
+    setKnowledgeBase(prev => [...prev, ...files.map(f => ({ ...f, personaId: aiProfile.id }))]);
   };
 
   const deleteFromKnowledgeBase = (name: string) => {
@@ -1962,7 +1982,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       userProfile, setUserProfile, setUserReferenceImage,
       gallery, addToGallery, deleteImageFromGallery, deleteImagesFromGallery, updateGalleryItem,
       journal, addJournalEntry, updateJournalEntry, deleteJournalEntry,
-      knowledgeBase, addToKnowledgeBase, addMultipleToKnowledgeBase, deleteFromKnowledgeBase, deleteMultipleFromKnowledgeBase,
+      knowledgeBase,
+      personaKnowledgeBase: knowledgeBase.filter(doc =>
+        // Show docs tagged to this persona, OR legacy untagged docs if no tagged docs exist
+        doc.personaId === aiProfile.id ||
+        (!doc.personaId && !knowledgeBase.some(d => d.personaId === aiProfile.id))
+      ),
+      addToKnowledgeBase, addMultipleToKnowledgeBase, deleteFromKnowledgeBase, deleteMultipleFromKnowledgeBase,
       memories, addMemory, updateMemory, deleteMemory,
       proactiveCommunications, addProactiveCommunication, deleteProactiveCommunication,
       toasts, addToast, removeToast,
