@@ -8,7 +8,7 @@ import { Download, Upload, Trash2, Bell, FileText, Key, Save, Database, Smartpho
 
 const SettingsScreen: React.FC = () => {
   const {
-    importData, knowledgeBase, addToKnowledgeBase,
+    importData,
     anthropicApiKey, setAnthropicApiKey,
     elevenLabsApiKey, setElevenLabsApiKey,
     geminiApiKey, setGeminiApiKey,
@@ -44,7 +44,6 @@ const SettingsScreen: React.FC = () => {
   const { chatHistory, addChatMessage, setChatHistory, sessions, setSessions, activeSessionId, setActiveSessionId } = useChat();
 
   const fileInputRef  = useRef<HTMLInputElement>(null);
-  const kbInputRef    = useRef<HTMLInputElement>(null);
 
   const [localAnthropicApiKey,    setLocalAnthropicApiKey]    = useState(anthropicApiKey || '');
   const [localElevenLabsApiKey,   setLocalElevenLabsApiKey]   = useState(elevenLabsApiKey || '');
@@ -888,38 +887,6 @@ const SettingsScreen: React.FC = () => {
               </div>
             </div>
           </div>
-        </section>
-
-        {/* ── Knowledge Base ── */}
-        <section>
-          <h3 className="text-lg font-semibold text-indigo-900 dark:text-indigo-100 mb-4 border-b border-indigo-200 dark:border-indigo-800 pb-2">Knowledge Base</h3>
-          <button
-            onClick={() => kbInputRef.current?.click()}
-            disabled={isImporting}
-            className="flex items-center justify-center w-full p-4 border-2 border-dashed border-indigo-200 dark:border-indigo-700 rounded-lg bg-white dark:bg-indigo-950 hover:bg-indigo-50 dark:hover:bg-indigo-900 transition-colors text-indigo-600 dark:text-indigo-400 disabled:opacity-50"
-          >
-            {isImporting ? <RefreshCw className="w-5 h-5 mr-2 animate-spin" /> : <Upload className="w-5 h-5 mr-2" />}
-            {isImporting ? 'Processing…' : 'Upload Documents'}
-          </button>
-          <input ref={kbInputRef} type="file" onChange={handleKBUpload} multiple
-            accept=".txt,.md,.pdf,.json,.csv,.xml,.html,.js,.ts,.py,.go,.rb,.sql,.yml,.yaml"
-            className="hidden" />
-          <p className="text-xs text-indigo-500 dark:text-indigo-400 mt-2 text-center">
-            Supported: .txt .md .pdf .json .csv .xml .html .js .ts .py and more
-          </p>
-          {knowledgeBase.length > 0 && (
-            <ul className="mt-3 space-y-1 max-h-48 overflow-y-auto">
-              {knowledgeBase.map((file, i) => (
-                <li key={i} className="flex items-center text-xs text-indigo-700 dark:text-indigo-300 bg-white dark:bg-indigo-900 p-2 rounded border border-indigo-100 dark:border-indigo-800">
-                  <FileText className="w-3 h-3 mr-2 flex-shrink-0 text-indigo-400" />
-                  <span className="truncate flex-1">{file.name}</span>
-                  <span className="ml-2 text-indigo-400 flex-shrink-0">
-                    {file.content.length > 1024 ? `${(file.content.length / 1024).toFixed(0)} KB` : `${file.content.length} B`}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
         </section>
 
         {/* ── Data Management ── */}

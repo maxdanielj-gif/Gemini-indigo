@@ -10,7 +10,7 @@ import { performOCR, processFile } from '../services/ocrService';
 
 const HistoryScreen: React.FC = () => {
   const { sessions, switchSession, deleteSession, deleteAllSessions, renameSession, activeSessionId, createNewSession } = useChat();
-  const { knowledgeBase, deleteFromKnowledgeBase, deleteMultipleFromKnowledgeBase, addMultipleToKnowledgeBase, addToast, proactiveCommunications, deleteProactiveCommunication } = useApp();
+  const { knowledgeBase, personaKnowledgeBase, deleteFromKnowledgeBase, deleteMultipleFromKnowledgeBase, addMultipleToKnowledgeBase, addToast, proactiveCommunications, deleteProactiveCommunication, aiProfile } = useApp();
   const [searchQuery, setSearchQuery] = useState('');
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState('');
@@ -33,14 +33,14 @@ const HistoryScreen: React.FC = () => {
   }, [sessions, searchQuery]);
 
   const filteredKnowledge = useMemo(() => {
-    if (!searchQuery.trim()) return knowledgeBase;
+    if (!searchQuery.trim()) return personaKnowledgeBase;
     
     const query = searchQuery.toLowerCase();
-    return knowledgeBase.filter(file => 
+    return personaKnowledgeBase.filter(file => 
       file.name.toLowerCase().includes(query) || 
       file.content.toLowerCase().includes(query)
     );
-  }, [knowledgeBase, searchQuery]);
+  }, [personaKnowledgeBase, searchQuery]);
 
   const filteredProactive = useMemo(() => {
     if (!searchQuery.trim()) return proactiveCommunications;
@@ -230,7 +230,7 @@ const HistoryScreen: React.FC = () => {
                 : 'text-indigo-700 dark:text-indigo-300 hover:text-indigo-900 dark:hover:text-indigo-100'
             }`}
           >
-            Knowledge Base ({knowledgeBase.length})
+            Knowledge Base ({personaKnowledgeBase.length})
           </button>
           <button
             onClick={() => setActiveTab('proactive')}
@@ -503,7 +503,7 @@ const HistoryScreen: React.FC = () => {
                   <FileIcon className="w-8 h-8 text-indigo-300 dark:text-indigo-600" />
                 </div>
                 <h3 className="text-lg font-medium text-indigo-900 dark:text-indigo-50">Knowledge base is empty</h3>
-                <p className="text-indigo-700 dark:text-indigo-300 mt-1">Upload files in the chat to see them here.</p>
+                <p className="text-indigo-700 dark:text-indigo-300 mt-1">Upload documents to build {aiProfile.name}'s knowledge base.</p>
               </div>
             )
           ) : (
