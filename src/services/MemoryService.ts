@@ -4,7 +4,8 @@ import { saveToDB, loadFromDB, deleteFromDB } from './db';
 const STORAGE_KEYS = {
   SESSIONS: 'indigo_chat_data_session_ids',
   ACTIVE: 'indigo_chat_data_active_session',
-  PREFIX: 'indigo_chat_data_session_'
+  PREFIX: 'indigo_chat_data_session_',
+  ACTIVE_PERSONA: 'indigo_chat_data_active_persona',
 };
 
 type Listener = () => void;
@@ -12,6 +13,7 @@ type Listener = () => void;
 class MemoryService {
   private sessions: ChatSession[] = [];
   private activeSessionId: string | null = null;
+  private activePersonaId: string | null = null;
   private listeners: Set<Listener> = new Set();
   public isLoaded = false;
 
@@ -29,19 +31,28 @@ class MemoryService {
           if (raw) loaded.push(typeof raw === 'string' ? JSON.parse(raw) : raw);
         }
         if (loaded.length > 0) {
-          const activeId = await loadFromDB(STORAGE_KEYS.ACTIVE) || loaded[0].id;
           this.sessions = loaded;
-          this.activeSessionId = activeId;
+          this.activePersonaId = await loadFromDB(STORAGE_KEYS.ACTIVE_PERSONA) || null;
+          const savedActiveId = await loadFromDB(STORAGE_KEYS.ACTIVE);
+          // Restore active session only if it belongs to the active persona
+          const personaSessions = this.getSessionsForPersona(this.activePersonaId);
+          if (savedActiveId && personaSessions.find(s => s.id === savedActiveId)) {
+            this.activeSessionId = savedActiveId;
+          } else if (personaSessions.length > 0) {
+            this.activeSessionId = personaSessions[personaSessions.length - 1].id;
+          } else {
+            this.activeSessionId = null;
+          }
         }
       }
 
-      if (this.sessions.length === 0) {
-        this.createNewSession('Initial Session');
+      if (this.sessions.length === 0 || !this.activeSessionId) {
+        this.createNewSession('Chat');
       }
     } catch (e) {
       console.error('Failed to load memory service data:', e);
       if (this.sessions.length === 0) {
-        this.createNewSession('Initial Session');
+        this.createNewSession('Chat');
       }
     } finally {
       this.isLoaded = true;
@@ -62,6 +73,7 @@ class MemoryService {
     try {
       await saveToDB(STORAGE_KEYS.SESSIONS, this.sessions.map((s) => s.id));
       await saveToDB(STORAGE_KEYS.ACTIVE, this.activeSessionId);
+      await saveToDB(STORAGE_KEYS.ACTIVE_PERSONA, this.activePersonaId);
       for (const session of this.sessions) {
         await saveToDB(`${STORAGE_KEYS.PREFIX}${session.id}`, session);
       }
@@ -70,8 +82,18 @@ class MemoryService {
     }
   }
 
-  public getSessions() {
-    return this.sessions;
+  private getSessionsForPersona(personaId: string | null): ChatSession[] {
+    if (!personaId) {
+      // Legacy: sessions without a personaId — show only those
+      return this.sessions.filter(s => !s.personaId);
+    }
+    return this.sessions.filter(s => s.personaId === personaId);
+  }
+
+  // ── Public API ───────────────────────────────────────────────────────────────
+
+  public getSessions(): ChatSession[] {
+    return this.getSessionsForPersona(this.activePersonaId);
   }
 
   public getActiveSessionId() {
@@ -85,6 +107,32 @@ class MemoryService {
   public getChatHistory(): ChatMessage[] {
     const active = this.getActiveSession();
     return active ? active.messages : [];
+  }
+
+  // Called when the user switches persona — filters session list to that persona
+  public switchToPersona(personaId: string, preferredActiveSessionId?: string | null) {
+    this.activePersonaId = personaId;
+    const personaSessions = this.getSessionsForPersona(personaId);
+
+    if (preferredActiveSessionId && personaSessions.find(s => s.id === preferredActiveSessionId)) {
+      this.activeSessionId = preferredActiveSessionId;
+    } else if (personaSessions.length > 0) {
+      this.activeSessionId = personaSessions[personaSessions.length - 1].id;
+    } else {
+      // No sessions yet for this persona — create one
+      const newSession: ChatSession = {
+        id: 'session-' + Date.now() + '-' + Math.floor(Math.random() * 1000000),
+        title: 'Chat',
+        messages: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        personaId,
+      };
+      this.sessions.push(newSession);
+      this.activeSessionId = newSession.id;
+    }
+    this.persist();
+    this.notify();
   }
 
   public addChatMessage(message: ChatMessage) {
@@ -137,6 +185,7 @@ class MemoryService {
       messages: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      personaId: this.activePersonaId || undefined,
     };
     this.sessions.push(newSession);
     this.activeSessionId = newSession.id;
@@ -156,18 +205,23 @@ class MemoryService {
     this.sessions = this.sessions.filter(s => s.id !== sessionId);
     deleteFromDB(`${STORAGE_KEYS.PREFIX}${sessionId}`).catch(() => {});
     if (this.activeSessionId === sessionId) {
-      this.activeSessionId = this.sessions.length > 0 ? this.sessions[this.sessions.length - 1].id : null;
+      const personaSessions = this.getSessionsForPersona(this.activePersonaId);
+      this.activeSessionId = personaSessions.length > 0
+        ? personaSessions[personaSessions.length - 1].id
+        : null;
     }
-    if (this.sessions.length === 0) {
-       this.createNewSession('Chat');
+    if (this.getSessionsForPersona(this.activePersonaId).length === 0) {
+      this.createNewSession('Chat');
     }
     this.persist();
     this.notify();
   }
 
+  // Deletes only sessions belonging to the current persona
   public deleteAllSessions() {
-    this.sessions.forEach(s => deleteFromDB(`${STORAGE_KEYS.PREFIX}${s.id}`).catch(() => {}));
-    this.sessions = [];
+    const toDelete = this.getSessionsForPersona(this.activePersonaId);
+    toDelete.forEach(s => deleteFromDB(`${STORAGE_KEYS.PREFIX}${s.id}`).catch(() => {}));
+    this.sessions = this.sessions.filter(s => !toDelete.includes(s));
     this.activeSessionId = null;
     this.createNewSession('Chat');
   }
@@ -184,7 +238,6 @@ class MemoryService {
 
   // Restore sessions from a backup (used by importData in AppContext)
   public async restoreSessions(sessions: ChatSession[], activeSessionId: string | null) {
-    // Clear existing session records from IndexedDB
     for (const s of this.sessions) {
       deleteFromDB(`${STORAGE_KEYS.PREFIX}${s.id}`).catch(() => {});
     }
