@@ -34,7 +34,6 @@ class MemoryService {
           this.sessions = loaded;
           this.activePersonaId = await loadFromDB(STORAGE_KEYS.ACTIVE_PERSONA) || null;
           const savedActiveId = await loadFromDB(STORAGE_KEYS.ACTIVE);
-          // Restore active session only if it belongs to the active persona
           const personaSessions = this.getSessionsForPersona(this.activePersonaId);
           if (savedActiveId && personaSessions.find(s => s.id === savedActiveId)) {
             this.activeSessionId = savedActiveId;
@@ -83,10 +82,7 @@ class MemoryService {
   }
 
   private getSessionsForPersona(personaId: string | null): ChatSession[] {
-    if (!personaId) {
-      // Legacy: sessions without a personaId — show only those
-      return this.sessions.filter(s => !s.personaId);
-    }
+    if (!personaId) return this.sessions.filter(s => !s.personaId);
     return this.sessions.filter(s => s.personaId === personaId);
   }
 
@@ -109,7 +105,7 @@ class MemoryService {
     return active ? active.messages : [];
   }
 
-  // Called when the user switches persona — filters session list to that persona
+  // Called when switching persona — filters session list to that persona only
   public switchToPersona(personaId: string, preferredActiveSessionId?: string | null) {
     this.activePersonaId = personaId;
     const personaSessions = this.getSessionsForPersona(personaId);
@@ -217,8 +213,8 @@ class MemoryService {
     this.notify();
   }
 
-  // Deletes only sessions belonging to the current persona
   public deleteAllSessions() {
+    // Only deletes sessions belonging to the current persona
     const toDelete = this.getSessionsForPersona(this.activePersonaId);
     toDelete.forEach(s => deleteFromDB(`${STORAGE_KEYS.PREFIX}${s.id}`).catch(() => {}));
     this.sessions = this.sessions.filter(s => !toDelete.includes(s));
