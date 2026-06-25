@@ -141,6 +141,7 @@ const AIProfileScreen: React.FC = () => {
   const [envMinGapInput, setEnvMinGapInput] = useState<string>(String(aiProfile.envMinGapMinutes ?? 30));
   const [aiInitiatedMessagesEnabled, setAiInitiatedMessagesEnabled] = useState<boolean>(aiProfile.aiInitiatedMessagesEnabled ?? true);
   const [pendingImport, setPendingImport] = useState<{ persona: AIProfile; existingName: string } | null>(null);
+  const [selectedPersonaId, setSelectedPersonaId] = useState<string>(aiProfile.id);
   const [imageStyle, setImageStyle] = useState<string>(aiProfile.imageStyle || 'none');
   const [imageGenerationInstructions, setImageGenerationInstructions] = useState<string[]>(aiProfile.imageGenerationInstructions || []);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
@@ -817,9 +818,12 @@ const AIProfileScreen: React.FC = () => {
                     <input type="file" accept=".json" onChange={handleImport} className="hidden" />
                 </label>
                 <button 
-                    onClick={handleExport}
+                    onClick={() => {
+                      const p = savedPersonas.find(p => p.id === selectedPersonaId);
+                      if (p) handleExportPersona(p);
+                    }}
                     className="p-1 bg-indigo-100 dark:bg-indigo-800 text-indigo-600 dark:text-indigo-400 rounded hover:bg-indigo-200 dark:hover:bg-indigo-700 transition-colors"
-                    title="Export Current Persona"
+                    title="Export selected persona"
                 >
                     <Download className="w-4 h-4" />
                 </button>
@@ -836,9 +840,9 @@ const AIProfileScreen: React.FC = () => {
             {savedPersonas.map(persona => (
                 <div 
                     key={persona.id}
-                    onClick={() => loadPersona(persona.id, chatHistory, sessions, activeSessionId, setChatHistory, setSessions, setActiveSessionId)}
+                    onClick={() => { setSelectedPersonaId(persona.id); loadPersona(persona.id, chatHistory, sessions, activeSessionId, setChatHistory, setSessions, setActiveSessionId); }}
                     className={`p-3 rounded-lg cursor-pointer flex items-center space-x-3 transition-colors ${
-                        aiProfile.id === persona.id 
+                        selectedPersonaId === persona.id 
                         ? 'bg-indigo-50 dark:bg-indigo-800 border border-indigo-200 dark:border-indigo-700' 
                         : 'hover:bg-indigo-50 dark:hover:bg-indigo-800/50 border border-transparent'
                     }`}
