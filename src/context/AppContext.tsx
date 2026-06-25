@@ -1255,33 +1255,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 2. Find and load the new persona
     const persona = savedPersonas.find(p => p.id === id);
     if (persona) {
-        // Update all active states to the new persona's data
-        const personaSessions = persona.sessions || [];
-        const personaActiveId = persona.activeSessionId || (personaSessions.length > 0 ? personaSessions[0].id : null);
-        
-        if (personaSessions.length === 0) {
-            // Create a default session if none exist
-            const defaultSession: ChatSession = {
-                id: 'session-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
-                title: 'New Chat',
-                messages: persona.chatHistory || [],
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-            };
-            setSessions([defaultSession]);
-            setActiveSessionId(defaultSession.id);
-            setChatHistory(defaultSession.messages);
-        } else {
-            setSessions(personaSessions);
-            setActiveSessionId(personaActiveId);
-            const activeSession = personaSessions.find(s => s.id === personaActiveId);
-            setChatHistory(activeSession ? activeSession.messages : []);
-        }
+        // Switch MemoryService to this persona's session context —
+        // this filters the session list to only show this persona's chats
+        memoryService.switchToPersona(persona.id, persona.activeSessionId || null);
 
         setMemories(persona.memories || []);
         setJournal(persona.journal || []);
-        // Knowledge base switch: filter to this persona's docs (or legacy untagged docs if none exist)
-        // We don't wipe the KB array — personaId filtering happens at read time
+        // Knowledge base filtering happens at read time via personaKnowledgeBase
         setAIProfileState({
           ...persona,
           imageGenerationInstructions: persona.imageGenerationInstructions !== undefined ? persona.imageGenerationInstructions : initialAIProfileState.imageGenerationInstructions
