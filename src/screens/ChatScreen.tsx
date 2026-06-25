@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Send, Image as ImageIcon, Mic, Paperclip, Volume2, RotateCcw, Edit2, X, FileText, CheckCheck, Loader2, Camera, Trash2, ExternalLink, Plus, MessageSquare, History, MoreVertical, ChevronLeft, ChevronRight, Search, Star, Headphones, ArrowDown, Download } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { useChat } from '../context/ChatContext';
+import { memoryService } from '../services/MemoryService';
 import { generateElevenLabsSpeech } from '../services/asyncService';
 import { showNativeNotification } from '../services/notificationService';
 import ChatMessageItem from '../components/ChatMessageItem';
@@ -24,6 +25,13 @@ const ChatScreen: React.FC = () => {
     deleteChatMessage, rateChatMessage, addFeedbackComment, setChatHistory, clearHistory,
     sessions, setSessions, activeSessionId, createNewSession, switchSession, deleteSession, deleteAllSessions, renameSession
   } = useChat();
+  // Keep MemoryService in sync with the active persona
+  React.useEffect(() => {
+    if (aiProfile?.id) {
+      memoryService.switchToPersona(aiProfile.id);
+    }
+  }, [aiProfile?.id]);
+
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
