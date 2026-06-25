@@ -14,7 +14,7 @@ const IMAGE_SIZES   = ['1K', '2K', '4K'];
 
 export default function GeminiImageScreen() {
   const navigate = useNavigate();
-  const { geminiApiKey, addToGallery, addToast } = useApp();
+  const { geminiApiKey, addToGallery, addToast, aiProfile } = useApp();
 
   const [prompt,       setPrompt]       = useState('');
   const [modelId,      setModelId]      = useState('gemini-3.1-flash-image-preview');
@@ -66,8 +66,16 @@ export default function GeminiImageScreen() {
     try {
       const validRefs = refImages.filter(Boolean) as string[];
 
+      // imageGenerationInstructions: per-persona style guidance (remove this block to disable)
+      const instructionSuffix = aiProfile.imageGenerationInstructions?.length
+        ? aiProfile.imageGenerationInstructions.join(', ')
+        : '';
+      const finalPrompt = instructionSuffix
+        ? `${prompt.trim()}. ${instructionSuffix}`
+        : prompt.trim();
+
       const body: any = {
-        prompt: prompt.trim(),
+        prompt: finalPrompt,
         modelId,
         aspectRatio,
         geminiKey: geminiApiKey,

@@ -235,9 +235,12 @@ const ImageGeneratorScreen: React.FC = () => {
     if (!wavespeedApiKey) { addToast({ title: 'No WaveSpeed key', message: 'Add your key in Settings.', type: 'warning' }); return; }
 
     const appearancePrefix = aiProfile.appearance?.trim();
-    const finalPrompt = appearancePrefix
-      ? `${appearancePrefix}. ${prompt.trim()}`
-      : prompt.trim();
+    // imageGenerationInstructions: per-persona style guidance (remove this block to disable)
+    const instructionSuffix = aiProfile.imageGenerationInstructions?.length
+      ? aiProfile.imageGenerationInstructions.join(', ')
+      : '';
+    const basePrompt = [appearancePrefix, prompt.trim()].filter(Boolean).join('. ');
+    const finalPrompt = instructionSuffix ? `${basePrompt}. ${instructionSuffix}` : basePrompt;
 
     promptRef.current = finalPrompt;
     setJobStatus('creating'); setStatusMsg('Creating task…'); setResultImages([]);
