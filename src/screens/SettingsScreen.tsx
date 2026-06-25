@@ -5,10 +5,11 @@ import { useChat } from '../context/ChatContext';
 import { requestNotificationPermission } from '../services/webPushService';
 import { processFile } from '../services/ocrService';
 import { Download, Upload, Trash2, Bell, FileText, Key, Save, Database, Smartphone, Cloud, RefreshCw, Clock, Shield, Edit2, LogOut, User, AlertCircle } from 'lucide-react';
+import { driveBackupGallery, driveRestoreGallery, driveSignOut, GalleryBackupItem } from '../services/googleDriveService';
 
 const SettingsScreen: React.FC = () => {
   const {
-    importData,
+    importData, knowledgeBase, addToKnowledgeBase,
     anthropicApiKey, setAnthropicApiKey,
     elevenLabsApiKey, setElevenLabsApiKey,
     geminiApiKey, setGeminiApiKey,
@@ -17,7 +18,7 @@ const SettingsScreen: React.FC = () => {
     resetApp, aiProfile, userProfile,
     notificationsEnabled, setNotificationsEnabled,
     fcmToken, setFcmToken,
-    exportData, addToast,
+    exportData, addToast, addToGallery,
     showTimestamps, setShowTimestamps,
     timeZone, setTimeZone,
     userId, setUserId,
@@ -26,7 +27,7 @@ const SettingsScreen: React.FC = () => {
     syncFrequency, setSyncFrequency,
     updateAIProfile,
     isDebuggerEnabled, setIsDebuggerEnabled,
-    firebaseBackup, firebaseRestore, firebaseGalleryBackup, firebaseGalleryRestore,
+    firebaseBackup, firebaseRestore,
     firebaseKBBackup, firebaseKBRestore,
     wavespeedApiKey, setWavespeedApiKey,
     firebaseApiKey, firebaseAuthDomain, firebaseProjectId,
@@ -44,6 +45,7 @@ const SettingsScreen: React.FC = () => {
   const { chatHistory, addChatMessage, setChatHistory, sessions, setSessions, activeSessionId, setActiveSessionId } = useChat();
 
   const fileInputRef  = useRef<HTMLInputElement>(null);
+  const kbInputRef    = useRef<HTMLInputElement>(null);
 
   const [localAnthropicApiKey,    setLocalAnthropicApiKey]    = useState(anthropicApiKey || '');
   const [localElevenLabsApiKey,   setLocalElevenLabsApiKey]   = useState(elevenLabsApiKey || '');
@@ -52,9 +54,9 @@ const SettingsScreen: React.FC = () => {
   const [isFirebaseBackingUp,  setIsFirebaseBackingUp]  = useState(false);
   const [isFirebaseRestoring,  setIsFirebaseRestoring]  = useState(false);
   const [isGalleryBackingUp,   setIsGalleryBackingUp]   = useState(false);
-  const [galleryBackupProgress, setGalleryBackupProgress] = useState<{done: number; total: number} | null>(null);
+  const [galleryBackupStep,    setGalleryBackupStep]    = useState<string | null>(null);
   const [isGalleryRestoring,   setIsGalleryRestoring]   = useState(false);
-  const [galleryRestoreProgress, setGalleryRestoreProgress] = useState<{done: number; total: number} | null>(null);
+  const [galleryRestoreStep,   setGalleryRestoreStep]   = useState<string | null>(null);
   const [isFullRestoring,      setIsFullRestoring]      = useState(false);
   const [fullRestoreStep,      setFullRestoreStep]       = useState<string | null>(null);
   const [showRestoreConfirm,   setShowRestoreConfirm]   = useState(false);
@@ -210,29 +212,21 @@ const SettingsScreen: React.FC = () => {
     return `${Math.floor(diff / 86_400_000)}d ago`;
   };
 
-  const handleGalleryFirebaseBackup = async () => {
-    if (!fbConfigReady) {
-      addToast({ title: 'Firebase not configured', message: 'Fill in API Key, Project ID and App ID in Firebase Configuration and save first.', type: 'error' });
-      return;
-    }
-    if (!fbStorageReady) {
-      addToast({ title: 'Storage Bucket required', message: 'Fill in the Firebase Storage Bucket field (e.g. your-project.appspot.com) in Firebase Configuration.', type: 'error' });
-      return;
-    }
+  const handleGalleryDriveBackup = async () => {
     setIsGalleryBackingUp(true);
-    setGalleryBackupProgress(null);
-    addToast({ title: 'Gallery backup starting…', message: `Uploading ${gallery.length} image(s) to Firebase Storage…`, type: 'info' });
+    setGalleryBackupStep(null);
     try {
-      const count = await firebaseGalleryBackup((done, total) => {
-        setGalleryBackupProgress({ done, total });
-      });
+      const count = await driveBackupGallery(
+        gallery as GalleryBackupItem[],
+        (step) => setGalleryBackupStep(step),
+      );
       setLastGalleryBackupTime(Date.now());
-      addToast({ title: 'Gallery backup complete', message: `${count} image(s) uploaded to Firebase Storage.`, type: 'success' });
+      addToast({ title: 'Gallery backed up', message: `${count} image(s) saved to Google Drive.`, type: 'success' });
     } catch (e: any) {
-      addToast({ title: 'Gallery backup failed', message: e.message || 'Could not upload gallery to Firebase.', type: 'error' });
+      addToast({ title: 'Gallery backup failed', message: e.message || 'Could not back up to Google Drive.', type: 'error' });
     } finally {
       setIsGalleryBackingUp(false);
-      setGalleryBackupProgress(null);
+      setGalleryBackupStep(null);
     }
   };
 
@@ -258,13 +252,20 @@ const SettingsScreen: React.FC = () => {
       if (localFbStorageBucket) {
         setFullRestoreStep('Step 2 / 2 — Downloading gallery images from Firebase Storage…');
         try {
-          const added = await firebaseGalleryRestore((done, total) => {
-            setFullRestoreStep(`Step 2 / 2 — Gallery: ${done} / ${total} images downloaded…`);
-          });
-          galleryMsg = added > 0 ? ` ${added} gallery image(s) restored.` : ' Gallery already up to date.';
+          setFullRestoreStep('Step 2 / 2 — Downloading gallery from Google Drive…');
+          const items = await driveRestoreGallery((step) => setFullRestoreStep(`Step 2 / 2 — ${step}`));
+          if (items) {
+            let added = 0;
+            for (const item of items) {
+              const exists = gallery.some((g: any) => g.id === item.id);
+              if (!exists) { addToGallery(item as any); added++; }
+            }
+            galleryMsg = added > 0 ? ` ${added} gallery image(s) restored from Google Drive.` : ' Gallery already up to date.';
+          } else {
+            galleryMsg = ' No gallery backup found in Google Drive.';
+          }
         } catch (galleryErr: any) {
-          // Gallery restore failure is non-fatal — app data was already restored
-          galleryMsg = ' (Gallery restore skipped: ' + (galleryErr.message || 'no backup found') + ')';
+          galleryMsg = ' (Gallery restore skipped: ' + (galleryErr.message || 'unknown error') + ')';
         }
       } else {
         galleryMsg = ' Gallery not restored (Storage Bucket not configured).';
@@ -284,27 +285,28 @@ const SettingsScreen: React.FC = () => {
     }
   };
 
-  const handleGalleryFirebaseRestore = async () => {
-    if (!fbConfigReady) {
-      addToast({ title: 'Firebase not configured', message: 'Fill in API Key, Project ID and App ID in Firebase Configuration and save first.', type: 'error' });
-      return;
-    }
-    if (!fbStorageReady) {
-      addToast({ title: 'Storage Bucket required', message: 'Fill in the Firebase Storage Bucket field to restore gallery images.', type: 'error' });
-      return;
-    }
+  const handleGalleryDriveRestore = async () => {
     setIsGalleryRestoring(true);
-    setGalleryRestoreProgress(null);
-    addToast({ title: 'Gallery restore starting…', message: 'Downloading images from Firebase Storage…', type: 'info' });
+    setGalleryRestoreStep(null);
     try {
-      const added = await firebaseGalleryRestore((done, total) => {
-        setGalleryRestoreProgress({ done, total });
-      });
+      const items = await driveRestoreGallery((step) => setGalleryRestoreStep(step));
+      if (!items) {
+        addToast({ title: 'No backup found', message: 'No gallery backup was found in your Google Drive.', type: 'warning' });
+        return;
+      }
+      let added = 0;
+      for (const item of items) {
+        const exists = gallery.some((g: any) => g.id === item.id);
+        if (!exists) {
+          addToGallery(item as any);
+          added++;
+        }
+      }
       addToast({
         title: 'Gallery restored',
         message: added > 0
-          ? `${added} new image(s) added to your gallery.`
-          : 'No new images — all backed-up images are already in your gallery.',
+          ? `${added} image(s) restored from Google Drive.`
+          : 'All backed-up images are already in your gallery.',
         type: 'success',
       });
     } catch (e: any) {
@@ -773,34 +775,27 @@ const SettingsScreen: React.FC = () => {
                 )}
               </div>
 
-              {/* Gallery backup to Firebase Storage */}
+              {/* Gallery backup — Google Drive */}
               <div className="border-t border-indigo-100 dark:border-indigo-800 pt-3">
-                <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300 mb-1">Gallery Images (Firebase Storage)</p>
+                <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300 mb-1">Gallery Images (Google Drive)</p>
                 <p className="text-xs text-indigo-500 dark:text-indigo-400 mb-2">
-                  Upload/download individual gallery images to Firebase Storage. Requires <strong>Storage Bucket</strong> to be configured above.
+                  Backs up your gallery as a single file in your Google Drive.
+                  Tapping either button will prompt you to sign in to Google if needed.
                   {gallery.length > 0
                     ? ` You have ${gallery.length} image(s) in your local gallery.`
                     : ' Your gallery is currently empty.'}
                 </p>
-                {gallery.length === 0 && (
-                  <p className="text-xs text-amber-600 dark:text-amber-400 mb-2">
-                    ⚠ If you have gallery images, visit the Gallery screen first — images load on demand and won't appear here until then.
-                  </p>
-                )}
                 <div className="grid grid-cols-2 gap-2">
                   {/* Backup */}
                   <div>
                     <button
-                      onClick={handleGalleryFirebaseBackup}
-                      disabled={isGalleryBackingUp || !fbConfigReady || gallery.length === 0}
-                      data-testid="firebase-gallery-backup-btn"
+                      onClick={handleGalleryDriveBackup}
+                      disabled={isGalleryBackingUp || gallery.length === 0}
                       className="w-full py-2.5 bg-indigo-500 text-white rounded-xl font-medium hover:bg-indigo-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-2 text-sm">
                       {isGalleryBackingUp ? (
                         <>
                           <RefreshCw className="w-4 h-4 animate-spin" />
-                          {galleryBackupProgress
-                            ? `Uploading ${galleryBackupProgress.done} / ${galleryBackupProgress.total}…`
-                            : 'Preparing…'}
+                          <span className="truncate text-xs">{galleryBackupStep || 'Working…'}</span>
                         </>
                       ) : 'Backup Gallery'}
                     </button>
@@ -813,16 +808,13 @@ const SettingsScreen: React.FC = () => {
                   {/* Restore */}
                   <div>
                     <button
-                      onClick={handleGalleryFirebaseRestore}
-                      disabled={isGalleryRestoring || !fbConfigReady}
-                      data-testid="firebase-gallery-restore-btn"
+                      onClick={handleGalleryDriveRestore}
+                      disabled={isGalleryRestoring}
                       className="w-full py-2.5 bg-white dark:bg-indigo-900 border border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 rounded-xl font-medium hover:bg-indigo-50 dark:hover:bg-indigo-800 transition-colors disabled:opacity-50 flex items-center justify-center gap-2 text-sm">
                       {isGalleryRestoring ? (
                         <>
                           <RefreshCw className="w-4 h-4 animate-spin" />
-                          {galleryRestoreProgress
-                            ? `${galleryRestoreProgress.done} / ${galleryRestoreProgress.total}`
-                            : 'Fetching…'}
+                          <span className="truncate text-xs">{galleryRestoreStep || 'Working…'}</span>
                         </>
                       ) : 'Restore Gallery'}
                     </button>
@@ -887,6 +879,38 @@ const SettingsScreen: React.FC = () => {
               </div>
             </div>
           </div>
+        </section>
+
+        {/* ── Knowledge Base ── */}
+        <section>
+          <h3 className="text-lg font-semibold text-indigo-900 dark:text-indigo-100 mb-4 border-b border-indigo-200 dark:border-indigo-800 pb-2">Knowledge Base</h3>
+          <button
+            onClick={() => kbInputRef.current?.click()}
+            disabled={isImporting}
+            className="flex items-center justify-center w-full p-4 border-2 border-dashed border-indigo-200 dark:border-indigo-700 rounded-lg bg-white dark:bg-indigo-950 hover:bg-indigo-50 dark:hover:bg-indigo-900 transition-colors text-indigo-600 dark:text-indigo-400 disabled:opacity-50"
+          >
+            {isImporting ? <RefreshCw className="w-5 h-5 mr-2 animate-spin" /> : <Upload className="w-5 h-5 mr-2" />}
+            {isImporting ? 'Processing…' : 'Upload Documents'}
+          </button>
+          <input ref={kbInputRef} type="file" onChange={handleKBUpload} multiple
+            accept=".txt,.md,.pdf,.json,.csv,.xml,.html,.js,.ts,.py,.go,.rb,.sql,.yml,.yaml"
+            className="hidden" />
+          <p className="text-xs text-indigo-500 dark:text-indigo-400 mt-2 text-center">
+            Supported: .txt .md .pdf .json .csv .xml .html .js .ts .py and more
+          </p>
+          {knowledgeBase.length > 0 && (
+            <ul className="mt-3 space-y-1 max-h-48 overflow-y-auto">
+              {knowledgeBase.map((file, i) => (
+                <li key={i} className="flex items-center text-xs text-indigo-700 dark:text-indigo-300 bg-white dark:bg-indigo-900 p-2 rounded border border-indigo-100 dark:border-indigo-800">
+                  <FileText className="w-3 h-3 mr-2 flex-shrink-0 text-indigo-400" />
+                  <span className="truncate flex-1">{file.name}</span>
+                  <span className="ml-2 text-indigo-400 flex-shrink-0">
+                    {file.content.length > 1024 ? `${(file.content.length / 1024).toFixed(0)} KB` : `${file.content.length} B`}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
 
         {/* ── Data Management ── */}
