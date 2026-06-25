@@ -4,6 +4,7 @@ export interface ChatSession {
   messages: ChatMessage[];
   createdAt: number;
   updatedAt: number;
+  personaId?: string;  // which persona this session belongs to
 }
 
 export interface AIProfile {
