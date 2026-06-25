@@ -1255,28 +1255,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 2. Find and load the new persona
     const persona = savedPersonas.find(p => p.id === id);
     if (persona) {
-        // Update all active states to the new persona's data
-        const personaSessions = persona.sessions || [];
-        const personaActiveId = persona.activeSessionId || (personaSessions.length > 0 ? personaSessions[0].id : null);
-        
-        if (personaSessions.length === 0) {
-            // Create a default session if none exist
-            const defaultSession: ChatSession = {
-                id: 'session-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
-                title: 'New Chat',
-                messages: persona.chatHistory || [],
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-            };
-            setSessions([defaultSession]);
-            setActiveSessionId(defaultSession.id);
-            setChatHistory(defaultSession.messages);
-        } else {
-            setSessions(personaSessions);
-            setActiveSessionId(personaActiveId);
-            const activeSession = personaSessions.find(s => s.id === personaActiveId);
-            setChatHistory(activeSession ? activeSession.messages : []);
-        }
+        // Switch MemoryService to this persona's session context
+        // This filters the session list and active session to only show this persona's chats
+        const personaActiveId = persona.activeSessionId || null;
+        memoryService.switchToPersona(persona.id, personaActiveId);
 
         setMemories(persona.memories || []);
         setJournal(persona.journal || []);
