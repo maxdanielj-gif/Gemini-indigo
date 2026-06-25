@@ -32,19 +32,6 @@
     <!-- ── SEO / sharing meta ── -->
     <meta name="description" content="indigo AI — your personal AI companion" />
 
-    <!-- ── Tailwind (loaded at runtime during dev; replaced by build output in prod) ── -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      tailwind.config = {
-        darkMode: 'class',
-        theme: {
-          extend: {
-            colors: { indigo: { 950: '#1e1b4b' } }
-          }
-        }
-      }
-    </script>
-
     <!-- ── Apply saved theme before first paint to prevent flash ── -->
     <script>
       (function () {
