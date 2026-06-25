@@ -4,6 +4,7 @@ export interface ChatSession {
   messages: ChatMessage[];
   createdAt: number;
   updatedAt: number;
+  personaId?: string;  // which persona this session belongs to
 }
 
 export interface AIProfile {
@@ -71,7 +72,6 @@ export interface AIProfile {
   aiCanUseYouTube?: boolean;
   aiCanUseGoogleMaps?: boolean;
   googleToolsEnabled?: boolean;   // Master toggle: run Gemini web search even when Claude is active
-  aiInitiatedMessagesEnabled?: boolean; // Master switch: silence all unprompted AI messages (default true)
   aiCanUseMotion?: boolean;        // Share device motion/orientation context with the AI
   aiCanSendProactiveEmails?: boolean;
   aiCanBrowse?: boolean;
