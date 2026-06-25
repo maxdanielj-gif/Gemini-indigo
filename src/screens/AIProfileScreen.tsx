@@ -140,6 +140,7 @@ const AIProfileScreen: React.FC = () => {
   const [envMinGapMinutes, setEnvMinGapMinutes] = useState<number>(aiProfile.envMinGapMinutes ?? 30);
   const [envMinGapInput, setEnvMinGapInput] = useState<string>(String(aiProfile.envMinGapMinutes ?? 30));
   const [aiInitiatedMessagesEnabled, setAiInitiatedMessagesEnabled] = useState<boolean>(aiProfile.aiInitiatedMessagesEnabled ?? true);
+  const [pendingImport, setPendingImport] = useState<{ persona: AIProfile; existingName: string } | null>(null);
   const [imageStyle, setImageStyle] = useState<string>(aiProfile.imageStyle || 'none');
   const [imageGenerationInstructions, setImageGenerationInstructions] = useState<string[]>(aiProfile.imageGenerationInstructions || []);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
@@ -608,6 +609,24 @@ const AIProfileScreen: React.FC = () => {
     }
   }, []);
 
+  const handleExportPersona = useCallback((persona: AIProfile) => {
+    try {
+      const dataStr = JSON.stringify(persona, null, 2);
+      const blob = new Blob([dataStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.style.display = 'none';
+      link.href = url;
+      link.download = `${persona.name.replace(/\s+/g, '_')}_persona.json`;
+      document.body.appendChild(link);
+      link.click();
+      setTimeout(() => { document.body.removeChild(link); URL.revokeObjectURL(url); }, 100);
+    } catch (err) {
+      console.error('Persona export failed:', err);
+      alert('Failed to export persona.');
+    }
+  }, []);
+
   const handleExport = useCallback(() => {
     try {
       // Create a complete profile object for export including current form state and chat data
@@ -675,28 +694,45 @@ const AIProfileScreen: React.FC = () => {
     }
   }, [aiProfile]);
 
+  const doImport = useCallback((persona: AIProfile, replace: boolean) => {
+    // If replacing, keep the original ID so it overwrites the existing entry.
+    // If creating new, generate a fresh ID.
+    const finalPersona = replace
+      ? persona
+      : { ...persona, id: Date.now().toString() + Math.random().toString(36).substr(2, 9) };
+    savePersona(finalPersona, finalPersona.chatHistory || [], finalPersona.sessions || [], finalPersona.activeSessionId || null);
+    loadPersona(finalPersona.id, finalPersona.chatHistory || [], finalPersona.sessions || [], finalPersona.activeSessionId || null, setChatHistory, setSessions, setActiveSessionId);
+    setPendingImport(null);
+    addToast({ title: 'Persona imported', message: `${finalPersona.name} is now active.`, type: 'success' });
+  }, [savePersona, loadPersona, setChatHistory, setSessions, setActiveSessionId, addToast]);
+
   const handleImport = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    // Reset so the same file can be re-selected later
+    e.target.value = '';
 
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
         const json = JSON.parse(event.target?.result as string);
-        // Basic validation
-        if (json.name && json.personality) {
-            // Ensure ID is unique to avoid overwriting unless intended
-            // For safety, let's always create a new ID for imported personas
-            const newPersona = { ...json, id: Date.now().toString() + Math.random().toString(36).substr(2, 9) };
-            savePersona(newPersona, newPersona.chatHistory || [], newPersona.sessions || [], newPersona.activeSessionId || null);
-            loadPersona(newPersona.id, newPersona.chatHistory || [], newPersona.sessions || [], newPersona.activeSessionId || null, setChatHistory, setSessions, setActiveSessionId);
-            alert("Persona imported successfully!");
+        if (!json.name || !json.personality) {
+          addToast({ title: 'Invalid file', message: 'This file does not look like a valid persona export.', type: 'error' });
+          return;
+        }
+        const parsed = json as AIProfile;
+        // Check if the ID already exists in savedPersonas
+        const existing = savedPersonas.find(p => p.id === parsed.id);
+        if (existing) {
+          // Ask the user before overwriting
+          setPendingImport({ persona: parsed, existingName: existing.name });
         } else {
-            alert("Invalid persona file format.");
+          // New persona — import directly
+          doImport(parsed, false);
         }
       } catch (err) {
-        console.error("Error importing persona", err);
-        alert("Failed to parse persona file.");
+        console.error('Error importing persona', err);
+        addToast({ title: 'Import failed', message: 'Could not read the persona file.', type: 'error' });
       }
     };
     reader.readAsText(file);
@@ -807,6 +843,13 @@ const AIProfileScreen: React.FC = () => {
                         : 'hover:bg-indigo-50 dark:hover:bg-indigo-800/50 border border-transparent'
                     }`}
                 >
+                    <button
+                        onClick={(e) => { e.stopPropagation(); handleExportPersona(persona); }}
+                        className="p-1 text-indigo-400 dark:text-indigo-500 hover:text-indigo-600 dark:hover:text-indigo-300 transition-colors flex-shrink-0"
+                        title={`Export ${persona.name}`}
+                    >
+                        <Download className="w-3.5 h-3.5" />
+                    </button>
                     <div className="w-10 h-10 rounded-full bg-indigo-200 dark:bg-indigo-700 overflow-hidden flex-shrink-0">
                         {persona.referenceImage ? (
                             <img src={persona.referenceImage} alt={persona.name} className="w-full h-full object-cover" />
@@ -1800,6 +1843,39 @@ const AIProfileScreen: React.FC = () => {
             </div>
         </div>
       </div>
+
+      {/* ── Replace persona confirmation modal ───────────────────────── */}
+      {pendingImport && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white dark:bg-indigo-950 rounded-xl shadow-xl max-w-sm w-full p-6 border border-indigo-200 dark:border-indigo-700">
+            <h3 className="text-base font-semibold text-indigo-900 dark:text-indigo-100 mb-2">Replace existing persona?</h3>
+            <p className="text-sm text-indigo-600 dark:text-indigo-400 mb-5">
+              The file you imported has the same ID as <span className="font-medium text-indigo-800 dark:text-indigo-200">"{pendingImport.existingName}"</span>. Do you want to replace it, or save as a new persona?
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => doImport(pendingImport.persona, true)}
+                className="w-full py-2 px-4 bg-red-500 hover:bg-red-600 text-white text-sm font-medium rounded-lg transition-colors"
+              >
+                Replace "{pendingImport.existingName}"
+              </button>
+              <button
+                onClick={() => doImport(pendingImport.persona, false)}
+                className="w-full py-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors"
+              >
+                Save as new persona
+              </button>
+              <button
+                onClick={() => setPendingImport(null)}
+                className="w-full py-2 px-4 bg-indigo-100 dark:bg-indigo-800 hover:bg-indigo-200 dark:hover:bg-indigo-700 text-indigo-700 dark:text-indigo-300 text-sm font-medium rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };
