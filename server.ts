@@ -272,8 +272,13 @@ function getRelevantExcerpt(content: string, keywords: string[], maxLength: numb
   return (start > 0 ? "…" : "") + content.slice(start, end) + (end < content.length ? "…" : "");
 }
 
-function buildKBContext(knowledgeBase: any[], currentUserMessage: string): string {
+function buildKBContext(knowledgeBase: any[], currentUserMessage: string, personaId?: string): string {
   if (!knowledgeBase || knowledgeBase.length === 0) return "";
+  // Filter to this persona's docs, falling back to untagged legacy docs if none exist
+  const tagged = personaId ? knowledgeBase.filter((d: any) => d.personaId === personaId) : [];
+  const filtered = tagged.length > 0 ? tagged : knowledgeBase.filter((d: any) => !d.personaId);
+  if (filtered.length === 0) return "";
+  knowledgeBase = filtered;
 
   const keywords = extractKeywords(currentUserMessage || "");
   const MAX_TOTAL_CHARS = 4000;
@@ -366,7 +371,7 @@ function buildSystemPrompt(aiProfile: any, userProfile: any, timeZone?: string, 
     : "";
 
   // Knowledge base — inject relevant documents scored against the current message
-  const kbContext = buildKBContext(knowledgeBase || [], currentUserMessage || "");
+  const kbContext = buildKBContext(knowledgeBase || [], currentUserMessage || "", aiProfile?.id);
 
   const parts = [
     `You are ${aiProfile.name}.`,

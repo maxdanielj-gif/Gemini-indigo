@@ -4,7 +4,6 @@ export interface ChatSession {
   messages: ChatMessage[];
   createdAt: number;
   updatedAt: number;
-  personaId?: string;  // which persona this session belongs to
 }
 
 export interface AIProfile {
@@ -110,6 +109,7 @@ export interface ChatMessage {
 export interface KnowledgeBaseDocument {
   name: string;
   content: string;
+  personaId?: string;  // which persona this document belongs to (undefined = shared/legacy)
 }
 
 export interface Memory {
