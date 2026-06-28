@@ -272,13 +272,8 @@ function getRelevantExcerpt(content: string, keywords: string[], maxLength: numb
   return (start > 0 ? "…" : "") + content.slice(start, end) + (end < content.length ? "…" : "");
 }
 
-function buildKBContext(knowledgeBase: any[], currentUserMessage: string, personaId?: string): string {
+function buildKBContext(knowledgeBase: any[], currentUserMessage: string): string {
   if (!knowledgeBase || knowledgeBase.length === 0) return "";
-  // Filter to this persona's docs, falling back to untagged legacy docs if none exist
-  const tagged = personaId ? knowledgeBase.filter((d: any) => d.personaId === personaId) : [];
-  const filtered = tagged.length > 0 ? tagged : knowledgeBase.filter((d: any) => !d.personaId);
-  if (filtered.length === 0) return "";
-  knowledgeBase = filtered;
 
   const keywords = extractKeywords(currentUserMessage || "");
   const MAX_TOTAL_CHARS = 4000;
@@ -371,7 +366,7 @@ function buildSystemPrompt(aiProfile: any, userProfile: any, timeZone?: string, 
     : "";
 
   // Knowledge base — inject relevant documents scored against the current message
-  const kbContext = buildKBContext(knowledgeBase || [], currentUserMessage || "", aiProfile?.id);
+  const kbContext = buildKBContext(knowledgeBase || [], currentUserMessage || "");
 
   const parts = [
     `You are ${aiProfile.name}.`,
@@ -1019,7 +1014,7 @@ app.post("/api/chat", async (req, res) => {
           max_tokens: aiProfile.maxTokens ?? 2048,
           system: systemPrompt,
           messages: claudeMessages,
-          temperature: aiProfile.temperature ?? 0.7,
+          temperature: Math.min(1, Math.max(0, aiProfile.temperature ?? 0.7)),  // Claude range: 0–1
           ...(aiProfile.topP     != null ? { top_p: aiProfile.topP }    : {}),
           ...(aiProfile.topK     != null ? { top_k: aiProfile.topK }    : {}),
         })
