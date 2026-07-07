@@ -16,7 +16,7 @@ const ChatScreen: React.FC = () => {
     aiProfile, userProfile, knowledgeBase, 
     addToKnowledgeBase, personaKnowledgeBase, addToGallery, apiKey,
     anthropicApiKey, geminiApiKey, elevenLabsApiKey, userLocation, userMotion,
-    memories, journal, 
+    memories, journal, isPersonaSwitching,
     addJournalEntry, addMemory, showTimestamps, timeZone, addToast,
     setAIProfile, setLastInteractionTime
   } = useApp();
@@ -392,7 +392,9 @@ const ChatScreen: React.FC = () => {
     const currentInput = overrideInput !== undefined ? overrideInput : input;
     // Block empty sends, and block re-entry using the synchronous ref (not isLoading,
     // which lags a render behind and lets a same-tick double-fire slip through).
-    if ((!currentInput.trim() && attachments.length === 0) || isLoading || isSendingRef.current) return;
+    // Also block sending while a persona switch is still settling, so a message
+    // can't go out with a mix of old/new persona details.
+    if ((!currentInput.trim() && attachments.length === 0) || isLoading || isSendingRef.current || isPersonaSwitching) return;
     isSendingRef.current = true;
 
     try {
@@ -1200,10 +1202,10 @@ const ChatScreen: React.FC = () => {
             </button>
             <button
                 onClick={() => handleSend()}
-                disabled={isLoading || isUploading || (!input.trim() && attachments.length === 0)}
+                disabled={isLoading || isUploading || isPersonaSwitching || (!input.trim() && attachments.length === 0)}
                 className="p-2.5 bg-indigo-600 dark:bg-indigo-500 text-white rounded-xl hover:bg-indigo-500 dark:hover:bg-indigo-400 shadow-lg shadow-indigo-600/20 transition-all active:scale-90 disabled:opacity-30 disabled:shadow-none"
             >
-                {isUploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+                {(isUploading || isPersonaSwitching) ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
             </button>
           </div>
         </div>
