@@ -59,6 +59,7 @@ interface AppState {
   userId: string;
   isSuccessfullyLoaded: boolean;
   galleryLoaded: boolean;
+  isPersonaSwitching: boolean;
 }
 
 interface AppContextType extends AppState {
@@ -345,6 +346,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     timestamp: number;
   } | null>(null);
   const [isSuccessfullyLoaded, setIsSuccessfullyLoaded] = useState(false);
+  const [isPersonaSwitching, setIsPersonaSwitching] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showResetOption, setShowResetOption] = useState(false);
   const MAX_MEMORIES = 20; // Define maximum number of memories
@@ -1086,8 +1088,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (core) saveToDB('indigo_app_data_core', { ...core, lastFirebaseBackupTime: ts });
         }).catch(() => {});
         addToast({ title: 'Auto-backup complete', message: `App data backed up to Firebase (${autoBackupSchedule} schedule).`, type: 'success' });
-        showNativeNotification(`${aiProfile.name} — Auto-backup complete`, {
-          body: 'Your Indigo AI data was backed up to Firebase automatically.',
+        showNativeNotification(`Indigo — Auto-backup complete`, {
+          body: `All personas and app data were backed up to Firebase automatically.`,
           icon: '/icon-192.png',
         });
       } catch (e) {
@@ -1245,6 +1247,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const loadPersona = (id: string, currentChatHistory: ChatMessage[], currentSessions: ChatSession[], currentActiveSessionId: string | null, setChatHistory: (h: ChatMessage[]) => void, setSessions: (s: ChatSession[]) => void, setActiveSessionId: (id: string | null) => void) => {
     if (id === aiProfile.id) return; // Already loaded
 
+    // Block sending until the switch below has fully settled (fixes a rare
+    // race where a message sent immediately after switching could go out
+    // with a mix of old/new persona details).
+    setIsPersonaSwitching(true);
+
     // 1. First, capture current state into the savedPersonas list
     setSavedPersonas(prev => prev.map(p => 
       p.id === aiProfile.id 
@@ -1276,6 +1283,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           type: "success" 
         });
     }
+
+    // Release the guard once React has committed the persona switch above.
+    setTimeout(() => setIsPersonaSwitching(false), 250);
   };
 
   const setUserProfile = (profile: UserProfile) => setUserProfileState(profile);
@@ -2002,7 +2012,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       userLocation,
       userMotion,
       environmentalSituation,
-      isLoaded, isSuccessfullyLoaded, lastInteractionTime, setLastInteractionTime,
+      isLoaded, isSuccessfullyLoaded, isPersonaSwitching, lastInteractionTime, setLastInteractionTime,
       userId, setUserId, isSyncing, setIsSyncing,
       exportGalleryData, exportGalleryChunks, importGalleryData, importGalleryChunks, syncGalleryToCloud, restoreGalleryFromCloud,
       updateAIProfile, fetchWithRetry,
