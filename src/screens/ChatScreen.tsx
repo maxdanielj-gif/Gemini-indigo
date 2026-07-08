@@ -750,6 +750,7 @@ const ChatScreen: React.FC = () => {
 
     const lines: string[] = [
       `Chat Log — ${sessionTitle}`,
+      `Persona: ${aiProfile.name}`,
       `Exported: ${exportDate}`,
       '='.repeat(60),
       '',
@@ -782,8 +783,9 @@ const ChatScreen: React.FC = () => {
     const a = document.createElement('a');
     a.href = url;
     const safeTitle = sessionTitle.replace(/[^a-z0-9\-_ ]/gi, '').replace(/\s+/g, '_').slice(0, 40) || 'chat';
+    const safePersonaName = (aiProfile.name || 'Indigo').replace(/[^a-z0-9\-_ ]/gi, '').replace(/\s+/g, '_').slice(0, 30);
     const dateStr = new Date().toISOString().slice(0, 10);
-    a.download = `${safeTitle}_${dateStr}.txt`;
+    a.download = `${safePersonaName}_${safeTitle}_${dateStr}.txt`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
