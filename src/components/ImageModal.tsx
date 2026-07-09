@@ -1,6 +1,7 @@
 import React from 'react';
 import { X, Download, Copy } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { downloadFile } from '../utils/downloadFile';
 
 interface ImageModalProps {
   isOpen: boolean;
@@ -105,15 +106,17 @@ const ImageModal: React.FC<ImageModalProps> = ({ isOpen, onClose, imageUrl, medi
             )}
             
             <div className="mt-4 flex flex-wrap justify-center gap-4">
-              <a
-                href={videoUrl || imageUrl}
-                download={mediaType === 'video' ? "video.mp4" : "image.png"}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  downloadFile(videoUrl || imageUrl, mediaType === 'video' ? 'video.mp4' : 'image.png');
+                }}
+                disabled={isConverting}
                 className={`flex items-center px-6 py-3 bg-indigo-100 dark:bg-indigo-900 text-indigo-900 dark:text-indigo-100 rounded-full font-bold hover:bg-indigo-200 dark:hover:bg-indigo-800 transition-all shadow-lg ${isConverting ? 'opacity-50 pointer-events-none' : ''}`}
-                onClick={(e) => e.stopPropagation()}
               >
                 <Download className="w-5 h-5 mr-2" />
                 Download
-              </a>
+              </button>
               
               {prompt && onCopyPrompt && (
                 <button
