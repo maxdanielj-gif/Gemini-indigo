@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
+import { downloadFile } from '../utils/downloadFile';
 import {
   Download, RefreshCw, X, Wand2, Upload, Cpu
 } from 'lucide-react';
@@ -309,8 +310,7 @@ const ImageGeneratorScreen: React.FC = () => {
   const isGenerating = jobStatus === 'creating' || jobStatus === 'waiting';
 
   const downloadImage = (url: string, i: number) => {
-    const a = document.createElement('a');
-    a.href = url; a.download = `indigo-image-${Date.now()}-${i}.png`; a.target = '_blank'; a.click();
+    downloadFile(url, `indigo-image-${Date.now()}-${i}.png`);
   };
 
   return (

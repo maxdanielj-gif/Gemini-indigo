@@ -4,6 +4,7 @@ import { Download, Trash2, Copy, Upload, FileArchive, Loader2, Maximize2, CheckS
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import ImageModal from '../components/ImageModal';
+import { downloadFile } from '../utils/downloadFile';
 
 // ── Persona reassignment popover ──────────────────────────────────────────────
 const PersonaPopover: React.FC<{
@@ -75,14 +76,13 @@ const GalleryItemCard: React.FC<{
             </div>
 
             <div className="flex items-center justify-center gap-1 px-2 py-2 bg-gray-50 dark:bg-indigo-950 border-t border-gray-200 dark:border-indigo-700">
-                <a
-                    href={item.url}
-                    download={`${activeTab}-${item.id}.png`}
+                <button
+                    onClick={() => downloadFile(item.url, `${activeTab}-${item.id}.png`)}
                     className="p-2 text-gray-500 dark:text-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-200 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
                     title="Download"
                 >
                     <Download className="w-5 h-5" />
-                </a>
+                </button>
                 <button
                     onClick={() => handleDelete(item.id)}
                     className="p-2 text-red-400 hover:text-red-600 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
