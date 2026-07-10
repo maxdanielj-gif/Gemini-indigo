@@ -55,7 +55,7 @@ export interface AIProfile {
   dynamicEmotion?: boolean;  // Auto-detect emotion from AI reply and adjust voice
   knowsItsAI: boolean;
   model: string;
-  llmProvider?: 'claude' | 'gemini';
+  llmProvider?: 'claude' | 'gemini' | 'openrouter';
   temperature: number;
   maxTokens?: number;
   timeAwareness: boolean;
