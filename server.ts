@@ -247,7 +247,7 @@ async function callGeminiChat(
   const data = await res.json();
   const candidate = data.candidates?.[0];
   const text = candidate?.content?.parts?.[0]?.text || "";
-  
+
   let groundingUrls: any[] = [];
   if (candidate?.groundingMetadata?.groundingChunks) {
     candidate.groundingMetadata.groundingChunks.forEach((chunk: any) => {
@@ -255,6 +255,22 @@ async function callGeminiChat(
         groundingUrls.push({ url: chunk.web.uri, title: chunk.web.title });
       }
     });
+  }
+
+  // A 200 OK response with no actual text is a real, silent failure mode —
+  // usually a safety filter blocking the prompt or the output, or the model
+  // hitting its token limit before producing visible text. Surface exactly
+  // why instead of handing back an empty chat bubble with no explanation.
+  if (!text.trim()) {
+    const blockReason = data.promptFeedback?.blockReason;
+    const finishReason = candidate?.finishReason;
+    if (blockReason) {
+      throw new Error(`Gemini blocked this prompt before generating a response (reason: ${blockReason}).`);
+    } else if (finishReason && finishReason !== "STOP") {
+      throw new Error(`Gemini returned no text (finish reason: ${finishReason}). This usually means a safety filter, a recitation/citation block, or the model running out of its token budget before writing an answer.`);
+    } else {
+      throw new Error("Gemini returned an empty response for an unknown reason.");
+    }
   }
 
   return { text, groundingUrls };
@@ -325,7 +341,22 @@ async function callOpenRouterChat(
   }
 
   const data = await res.json();
-  const text = data.choices?.[0]?.message?.content || "";
+  const choice = data.choices?.[0];
+  const text = choice?.message?.content || "";
+
+  if (!text.trim()) {
+    const finishReason = choice?.finish_reason;
+    if (finishReason === "length") {
+      throw new Error(`Model "${model}" ran out of its response budget before writing an actual answer. This happens with reasoning-heavy models that spend their whole token limit "thinking" and never get to the final response — try a different model, or a shorter/simpler message.`);
+    } else if (finishReason === "content_filter") {
+      throw new Error(`Model "${model}" refused to respond — its content filter blocked the output.`);
+    } else if (finishReason) {
+      throw new Error(`Model "${model}" returned no text (finish reason: ${finishReason}).`);
+    } else {
+      throw new Error(`Model "${model}" returned an empty response for an unknown reason.`);
+    }
+  }
+
   return { text };
 }
 
@@ -1204,6 +1235,18 @@ app.post("/api/chat", async (req, res) => {
     );
 
     const text = response.content[0]?.type === "text" ? response.content[0].text : "";
+
+    if (!text.trim()) {
+      const stopReason = response.stop_reason;
+      if (stopReason === "max_tokens") {
+        throw new Error(`Claude ran out of its response budget (max_tokens: ${aiProfile.maxTokens ?? 2048}) before writing an actual answer — this can happen when the model spends its whole limit on internal reasoning. Try raising the max tokens in AI Profile settings, or shortening the conversation.`);
+      } else if (stopReason === "refusal") {
+        throw new Error("Claude declined to respond to this message.");
+      } else {
+        throw new Error(`Claude returned an empty response (stop reason: ${stopReason || "unknown"}).`);
+      }
+    }
+
     res.json({ content: enforceActionBrackets(text, aiProfile), provider: "claude" });
   } catch (e: any) {
     // If Claude also fails, try Gemini as last resort
