@@ -115,12 +115,67 @@ const AIProfileScreen: React.FC = () => {
     fetchLatestProfile();
   }, [userId]);
   
-  const CLAUDE_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'];
+  // Small fallback list used only if the live fetch (below) fails or hasn't
+  // completed yet — e.g. no API key saved, or offline. Kept intentionally
+  // short since it's just a safety net, not the primary source of models.
+  const FALLBACK_CLAUDE_MODELS = [
+    { id: 'claude-sonnet-5', name: 'Claude Sonnet (Recommended)' },
+    { id: 'claude-opus-4-8', name: 'Claude Opus (Most capable)' },
+    { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku (Fastest)' },
+  ];
+  const FALLBACK_GEMINI_MODELS = [
+    { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash (Fast)' },
+    { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro (Capable)' },
+    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
+  ];
   // Accept any model string
   const validateModel = (m: string | undefined): string => {
     if (m) return m;
-    return 'claude-sonnet-4-6';
+    return 'claude-sonnet-5';
   };
+
+  // Live model lists — fetched from Anthropic/Google directly (via our server,
+  // which has the actual API keys) so this dropdown reflects whatever models
+  // are currently available, without needing an app update every time either
+  // provider changes their lineup. Falls back to the static lists above if
+  // the fetch fails or no key is saved yet.
+  const [liveClaudeModels, setLiveClaudeModels] = useState<{ id: string; name: string }[] | null>(null);
+  const [liveGeminiModels, setLiveGeminiModels] = useState<{ id: string; name: string }[] | null>(null);
+  const [isRefreshingModels, setIsRefreshingModels] = useState(false);
+
+  const refreshModelLists = useCallback(async () => {
+    setIsRefreshingModels(true);
+    const [claudeResult, geminiResult] = await Promise.allSettled([
+      anthropicApiKey
+        ? fetch('/api/models/claude', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: anthropicApiKey }),
+          }).then(r => (r.ok ? r.json() : Promise.reject(new Error('failed'))))
+        : Promise.reject(new Error('no key')),
+      geminiApiKey
+        ? fetch('/api/models/gemini', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: geminiApiKey }),
+          }).then(r => (r.ok ? r.json() : Promise.reject(new Error('failed'))))
+        : Promise.reject(new Error('no key')),
+    ]);
+    if (claudeResult.status === 'fulfilled' && Array.isArray(claudeResult.value.models) && claudeResult.value.models.length > 0) {
+      setLiveClaudeModels(claudeResult.value.models);
+    }
+    if (geminiResult.status === 'fulfilled' && Array.isArray(geminiResult.value.models) && geminiResult.value.models.length > 0) {
+      setLiveGeminiModels(geminiResult.value.models);
+    }
+    setIsRefreshingModels(false);
+  }, [anthropicApiKey, geminiApiKey]);
+
+  // Fetch once on load — quietly falls back to the static lists if it fails,
+  // so this never blocks or breaks the screen.
+  useEffect(() => { refreshModelLists(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const claudeModelOptions = liveClaudeModels && liveClaudeModels.length > 0 ? liveClaudeModels : FALLBACK_CLAUDE_MODELS;
+  const geminiModelOptions = liveGeminiModels && liveGeminiModels.length > 0 ? liveGeminiModels : FALLBACK_GEMINI_MODELS;
 
   const [model, setModel] = useState(validateModel(aiProfile.model));
   const [llmProvider, setLlmProvider] = useState<'claude' | 'gemini'>(
@@ -502,7 +557,7 @@ const AIProfileScreen: React.FC = () => {
         proactiveEmailFrequency: 'off',
         proactiveBlogFrequency: 'off',
         knowsItsAI: true,
-        model: 'claude-sonnet-4-6',
+        model: 'claude-sonnet-5',
         temperature: 0.7,
         timeAwareness: true,
         ambientMode: false,
@@ -1338,7 +1393,7 @@ const AIProfileScreen: React.FC = () => {
                                   const p = e.target.value as 'claude' | 'gemini';
                                   setLlmProvider(p);
                                   // Reset model to a sensible default for the new provider
-                                  if (p === 'claude') setModel('claude-sonnet-4-6');
+                                  if (p === 'claude') setModel('claude-sonnet-5');
                                   else if (p === 'gemini') setModel('gemini-3.5-flash');
                                 }}
                                 className="w-full p-2 border border-indigo-300 dark:border-indigo-700 rounded-md bg-white dark:bg-indigo-900 text-indigo-900 dark:text-indigo-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
@@ -1350,7 +1405,18 @@ const AIProfileScreen: React.FC = () => {
 
                         {/* Model selector — changes based on provider */}
                         <div>
-                            <label className="block text-sm font-medium text-indigo-700 dark:text-indigo-300 mb-1">AI Model</label>
+                            <div className="flex items-center justify-between mb-1">
+                                <label className="block text-sm font-medium text-indigo-700 dark:text-indigo-300">AI Model</label>
+                                <button
+                                    type="button"
+                                    onClick={refreshModelLists}
+                                    disabled={isRefreshingModels}
+                                    className="text-xs text-indigo-500 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-200 disabled:opacity-50 flex items-center gap-1"
+                                    title="Fetch the latest models directly from Anthropic/Google"
+                                >
+                                    {isRefreshingModels ? 'Refreshing…' : '↻ Refresh list'}
+                                </button>
+                            </div>
 
                             {llmProvider === 'claude' && (
                                 <select
@@ -1358,9 +1424,9 @@ const AIProfileScreen: React.FC = () => {
                                     onChange={(e) => setModel(e.target.value)}
                                     className="w-full p-2 border border-indigo-300 dark:border-indigo-700 rounded-md bg-white dark:bg-indigo-900 text-indigo-900 dark:text-indigo-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                                 >
-                                    <option value="claude-sonnet-4-6">Claude Sonnet (Recommended)</option>
-                                    <option value="claude-opus-4-6">Claude Opus (Most capable)</option>
-                                    <option value="claude-haiku-4-5-20251001">Claude Haiku (Fastest)</option>
+                                    {claudeModelOptions.map(m => (
+                                        <option key={m.id} value={m.id}>{m.name}</option>
+                                    ))}
                                 </select>
                             )}
 
@@ -1370,12 +1436,16 @@ const AIProfileScreen: React.FC = () => {
                                     onChange={(e) => setModel(e.target.value)}
                                     className="w-full p-2 border border-indigo-300 dark:border-indigo-700 rounded-md bg-white dark:bg-indigo-900 text-indigo-900 dark:text-indigo-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                                 >
-                                    <option value="gemini-3.5-flash">Gemini 3.5 Flash (Fast)</option>
-                                    <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (Capable)</option>
-                                    <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-                                    <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+                                    {geminiModelOptions.map(m => (
+                                        <option key={m.id} value={m.id}>{m.name}</option>
+                                    ))}
                                 </select>
                             )}
+                            <p className="text-[11px] text-indigo-400 dark:text-indigo-500 mt-1">
+                                {liveClaudeModels || liveGeminiModels
+                                    ? "Showing the current model list from your provider."
+                                    : "Showing a built-in default list — add an API key above to load the current list automatically."}
+                            </p>
 
                         </div>
                         
