@@ -7,7 +7,7 @@ import { Trash2, Edit2, Save, X, RefreshCw } from 'lucide-react';
 const JournalScreen: React.FC = () => {
   const {
     journal, addJournalEntry, updateJournalEntry, deleteJournalEntry,
-    aiProfile, userProfile, timeZone, addToast, anthropicApiKey,
+    aiProfile, userProfile, timeZone, addToast, anthropicApiKey, geminiApiKey,
   } = useApp();
   const { chatHistory } = useChat();
   const [isGenerating, setIsGenerating] = useState(false);
@@ -46,6 +46,7 @@ const JournalScreen: React.FC = () => {
           aiProfile,
           userProfile,
           anthropicKey: anthropicApiKey || undefined,
+          geminiKey: geminiApiKey || undefined,
         }),
       });
       if (!res.ok) throw new Error((await res.json()).error || 'Failed');
