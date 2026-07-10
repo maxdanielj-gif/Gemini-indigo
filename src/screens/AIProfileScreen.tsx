@@ -366,7 +366,7 @@ const AIProfileScreen: React.FC = () => {
     setKnowsItsAI(aiProfile.knowsItsAI ?? true);
     setReferenceImage(aiProfile.referenceImage);
     setModel(validateModel(aiProfile.model));
-    setLlmProvider(aiProfile.llmProvider === 'gemini' ? 'gemini' : 'claude');
+    setLlmProvider(aiProfile.llmProvider === 'gemini' ? 'gemini' : aiProfile.llmProvider === 'openrouter' ? 'openrouter' : 'claude');
     setTemperature(aiProfile.temperature || 0.7);
     setTimeAwareness(aiProfile.timeAwareness !== undefined ? aiProfile.timeAwareness : true);
     setAmbientModeState(aiProfile.ambientMode ?? false);
