@@ -9,6 +9,7 @@ const ChatManager: React.FC = () => {
     userProfile,
     anthropicApiKey,
     geminiApiKey,
+    openrouterApiKey,
     timeZone,
     isLoaded,
     userId,
@@ -35,6 +36,8 @@ const ChatManager: React.FC = () => {
             messages: chatHistory.slice(-20),
             aiProfile,
             anthropicKey: anthropicApiKey || undefined,
+            geminiKey: geminiApiKey || undefined,
+            openrouterKey: openrouterApiKey || undefined,
           }),
         });
         if (!res.ok) return;
@@ -83,6 +86,7 @@ const ChatManager: React.FC = () => {
   const userIdRef           = React.useRef(userId);
   const anthropicKeyRef     = React.useRef(anthropicApiKey);
   const geminiKeyRef        = React.useRef(geminiApiKey);
+  const openrouterKeyRef    = React.useRef(openrouterApiKey);
   const envSituationRef     = React.useRef(environmentalSituation);
 
   useEffect(() => { lastInteractionRef.current  = lastInteractionTime;      }, [lastInteractionTime]);
@@ -92,6 +96,7 @@ const ChatManager: React.FC = () => {
   useEffect(() => { userIdRef.current            = userId;                   }, [userId]);
   useEffect(() => { anthropicKeyRef.current      = anthropicApiKey;          }, [anthropicApiKey]);
   useEffect(() => { geminiKeyRef.current         = geminiApiKey;             }, [geminiApiKey]);
+  useEffect(() => { openrouterKeyRef.current     = openrouterApiKey;         }, [openrouterApiKey]);
   useEffect(() => { envSituationRef.current      = environmentalSituation;  }, [environmentalSituation]);
 
   const sessionStartRef       = React.useRef(Date.now());
@@ -170,6 +175,7 @@ const ChatManager: React.FC = () => {
             userProfile: userProfileRef.current,
             anthropicApiKey: anthropicKeyRef.current || undefined,
             geminiKey: geminiKeyRef.current || undefined,
+            openrouterKey: openrouterKeyRef.current || undefined,
             timeZone,
             isAmbient: true,
             environmentalContext: env.situation,
