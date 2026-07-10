@@ -1221,17 +1221,38 @@ app.post("/api/chat", async (req, res) => {
       }
     }
 
+    const buildClaudeParams = (includeSamplingParams: boolean) => ({
+      model: validateClaudeModel((useGemini || useOpenRouter) ? undefined : selectedModel),
+      max_tokens: aiProfile.maxTokens ?? 2048,
+      system: systemPrompt,
+      messages: claudeMessages,
+      ...(includeSamplingParams ? {
+        temperature: Math.min(1, Math.max(0, aiProfile.temperature ?? 0.7)),  // Claude range: 0–1
+        ...(aiProfile.topP != null ? { top_p: aiProfile.topP } : {}),
+        ...(aiProfile.topK != null ? { top_k: aiProfile.topK } : {}),
+      } : {}),
+    });
+
     const response = await retry(
-      async () =>
-        await client.messages.create({
-          model: validateClaudeModel((useGemini || useOpenRouter) ? undefined : selectedModel),
-          max_tokens: aiProfile.maxTokens ?? 2048,
-          system: systemPrompt,
-          messages: claudeMessages,
-          temperature: Math.min(1, Math.max(0, aiProfile.temperature ?? 0.7)),  // Claude range: 0–1
-          ...(aiProfile.topP     != null ? { top_p: aiProfile.topP }    : {}),
-          ...(aiProfile.topK     != null ? { top_k: aiProfile.topK }    : {}),
-        })
+      async () => {
+        try {
+          return await client.messages.create(buildClaudeParams(true) as any);
+        } catch (err: any) {
+          // Some newer/reasoning-oriented Claude models reject sampling
+          // parameters entirely (e.g. "`temperature` is deprecated for this
+          // model") rather than just constraining their range. Instead of
+          // failing the whole request over a parameter the user never
+          // directly asked to set to something unusual, retry once without
+          // temperature/top_p/top_k and let the model use its own defaults.
+          const msg = err?.error?.error?.message || err?.error?.message || err?.message || JSON.stringify(err || {});
+          const isSamplingParamRejection = /temperature|top_p|top_k/i.test(msg) && /deprecated|not supported|not allowed|invalid/i.test(msg);
+          if (isSamplingParamRejection) {
+            console.log(`Claude rejected sampling parameters ("${msg}") — retrying without them.`);
+            return await client.messages.create(buildClaudeParams(false) as any);
+          }
+          throw err;
+        }
+      }
     );
 
     const text = response.content[0]?.type === "text" ? response.content[0].text : "";
