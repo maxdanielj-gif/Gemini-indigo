@@ -19,6 +19,7 @@ const ChatManager: React.FC = () => {
     exportData,
     fetchWithRetry,
     environmentalSituation,
+    addToast,
   } = useApp();
 
   const { addChatMessage, chatHistory, sessions, activeSessionId } = useChat();
@@ -69,9 +70,10 @@ const ChatManager: React.FC = () => {
         document.body.appendChild(a);
         a.click();
         setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
-        console.log('Auto JSON backup downloaded');
-      } catch (e) {
+        addToast({ title: 'Auto backup saved', message: `A backup file (indigo_auto_backup_${ts}.json) was saved to your device's Downloads.`, type: 'success' });
+      } catch (e: any) {
         console.error('Auto JSON backup failed:', e);
+        addToast({ title: 'Auto backup failed', message: e?.message || 'Could not create the backup file.', type: 'error' });
       }
     }, autoJsonBackupInterval * 60 * 1000);
 
