@@ -130,14 +130,18 @@ function getAnthropicClient(clientKey?: string): Anthropic {
 }
 
 // ── Claude model validation ───────────────────────────────────────────────────
-const CLAUDE_MODELS = ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"];
+// This used to hard-reject any model not in a small hardcoded list, silently
+// downgrading requests to an old default whenever Anthropic released a new
+// model. Now it only supplies a fallback when no model was specified at all —
+// Anthropic's API is the source of truth for which model IDs are valid, and
+// the live model list (/api/models/claude) is how the UI stays current.
+const DEFAULT_CLAUDE_MODEL = "claude-sonnet-5";
 function validateClaudeModel(model?: string): string {
-  if (model && CLAUDE_MODELS.includes(model)) return model;
-  return "claude-sonnet-4-6"; // sensible default
+  return model && model.trim() ? model.trim() : DEFAULT_CLAUDE_MODEL; // sensible default
 }
 
 // ── Gemini client helper ──────────────────────────────────────────────────────
-const GEMINI_MODELS = ["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"];
+const GEMINI_MODELS = ["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"];
 function isGeminiModel(model?: string): boolean {
   return !!model && (model.startsWith("gemini-") || GEMINI_MODELS.includes(model));
 }
@@ -633,6 +637,58 @@ app.use(cookieParser());
 // ── Health ────────────────────────────────────────────────────────────────────
 app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
 
+// ── Live model lists ──────────────────────────────────────────────────────────
+// Fetches the current list of available models directly from each provider,
+// so the AI Profile screen's model dropdown stays accurate as Anthropic and
+// Google add or retire models — instead of a list hardcoded in this app that
+// silently goes stale. Falls back gracefully (empty list) if no key is
+// available yet or the provider's API is unreachable; the client keeps its
+// own small default list to fall back to in that case.
+app.post("/api/models/claude", express.json(), async (req, res) => {
+  const apiKey = req.body?.key || process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return res.status(400).json({ error: "No Anthropic key available." });
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/models?limit=100", {
+      headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    const models = (data.data || [])
+      // Mythos-tier models require special access most users won't have —
+      // hide them here so picking one doesn't just produce a confusing error.
+      .filter((m: any) => !/mythos/i.test(m.id))
+      .map((m: any) => ({ id: m.id, name: m.display_name || m.id }));
+    res.json({ models });
+  } catch (e: any) {
+    console.error("Claude model list error:", e.message);
+    res.status(500).json({ error: e.message || "Failed to fetch Claude models." });
+  }
+});
+
+app.post("/api/models/gemini", express.json(), async (req, res) => {
+  const apiKey = req.body?.key || process.env.GEMINI_API_KEY;
+  if (!apiKey) return res.status(400).json({ error: "No Gemini key available." });
+  try {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}&pageSize=200`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    const models = (data.models || [])
+      // Only keep models this app can actually chat with — Google's list
+      // also includes embedding, image-only, TTS, and other special-purpose
+      // models that would just fail if picked here.
+      .filter((m: any) => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes("generateContent"))
+      .filter((m: any) => !/embedding|aqa|image|tts|live/i.test(m.name))
+      .map((m: any) => ({
+        id: (m.name || "").replace(/^models\//, ""),
+        name: m.displayName || (m.name || "").replace(/^models\//, ""),
+      }));
+    res.json({ models });
+  } catch (e: any) {
+    console.error("Gemini model list error:", e.message);
+    res.status(500).json({ error: e.message || "Failed to fetch Gemini models." });
+  }
+});
+
 // ── Web Push ──────────────────────────────────────────────────────────────────
 app.get("/api/vapid-public-key", (_req, res) => {
   if (!VAPID_PUBLIC_KEY) {
@@ -869,7 +925,7 @@ app.post("/api/chat", async (req, res) => {
 
   const hasYouTube = Boolean(currentUserMessage.match(/(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]+)/));
 
-  let selectedModel = aiProfile.model || "claude-sonnet-4-6";
+  let selectedModel = aiProfile.model || DEFAULT_CLAUDE_MODEL;
   if (hasYouTube) {
     // Ensure we use Gemini for YouTube shorts/videos to prevent Claude fallback
     selectedModel = "gemini-3.5-flash";
@@ -890,7 +946,7 @@ app.post("/api/chat", async (req, res) => {
           generationConfig: { temperature: 0.2, maxOutputTokens: 512 },
         };
         const groundingRes = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${gtApiKey}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${gtApiKey}`,
           { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(groundingBody) }
         );
         if (groundingRes.ok) {
@@ -1590,7 +1646,7 @@ app.post("/api/ocr", async (req, res) => {
     });
 
     const response = await client.messages.create({
-      model: "claude-sonnet-4-6",
+      model: DEFAULT_CLAUDE_MODEL,
       max_tokens: 4096,
       messages: [{ role: "user", content: contentParts }],
     });
