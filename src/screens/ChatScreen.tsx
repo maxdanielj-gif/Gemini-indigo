@@ -10,6 +10,7 @@ import { showNativeNotification } from '../services/notificationService';
 import ChatMessageItem from '../components/ChatMessageItem';
 import ImageModal from '../components/ImageModal';
 import { processFile } from '../services/ocrService';
+import { getFriendlyErrorMessage } from '../utils/errorMessages';
 
 const ChatScreen: React.FC = () => {
   const { 
@@ -510,7 +511,7 @@ const ChatScreen: React.FC = () => {
       console.error("Error generating response:", error);
       addToast({
         title: "Generation Error",
-        message: error.message || "Failed to get a response from the AI.",
+        message: getFriendlyErrorMessage(error),
         type: "error",
       });
     } finally {
@@ -558,7 +559,7 @@ const ChatScreen: React.FC = () => {
       } catch (e: any) {
         addToast({
           title: "Journal entry failed",
-          message: e?.message || "Could not reach the server.",
+          message: getFriendlyErrorMessage(e),
           type: "error",
         });
       }
@@ -602,7 +603,7 @@ const ChatScreen: React.FC = () => {
     } catch (e: any) {
       addToast({
         title: "Memory save failed",
-        message: e?.message || "Could not reach the server.",
+        message: getFriendlyErrorMessage(e),
         type: "error",
       });
     }
