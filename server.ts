@@ -146,6 +146,29 @@ function isGeminiModel(model?: string): boolean {
   return !!model && (model.startsWith("gemini-") || GEMINI_MODELS.includes(model));
 }
 
+// ── Action-formatting enforcement (text-only / ElevenLabs v3 mode) ────────────
+// buildSystemPrompt() already instructs the model to use [brackets] instead of
+// *asterisks* for actions/emotes when textOnlyMode is on (this matters because
+// ElevenLabs v3 reads bracketed text as stage directions, not asterisks). Most
+// models follow that instruction fine, but some — especially certain
+// roleplay-tuned models available through OpenRouter — are trained so heavily
+// on asterisk-action formatting that a single system-prompt line doesn't
+// reliably override it. Rather than trust every model's instruction-following,
+// this normalizes the actual output text as a guarantee: it only touches
+// single-asterisk-wrapped spans (the *action* convention), leaving other
+// asterisk use (like **bold**, which this normalizer treats as already having
+// its outer pair intact) essentially alone.
+function enforceActionBrackets(text: string, aiProfile: any): string {
+  if (!aiProfile?.textOnlyMode || !text) return text;
+  // Strip markdown bold first — spoken text shouldn't have markdown at all,
+  // and this prevents the action-conversion below from misreading "**word**"
+  // as two overlapping action spans.
+  let out = text.replace(/\*\*([^*\n]+)\*\*/g, "$1");
+  // Convert remaining single-asterisk action/emote spans to brackets.
+  out = out.replace(/\*([^*\n]+)\*/g, "[$1]");
+  return out;
+}
+
 async function callGeminiChat(
   systemPrompt: string,
   messages: any[],
@@ -1106,7 +1129,7 @@ app.post("/api/chat", async (req, res) => {
   if (useGemini) {
     try {
       const { text, groundingUrls } = await callGeminiChat(systemPrompt, messages, selectedModel, aiProfile.temperature ?? 0.7, geminiKey, attachments, aiProfile.aiCanUseWebSearch);
-      return res.json({ content: text, provider: "gemini", groundingUrls });
+      return res.json({ content: enforceActionBrackets(text, aiProfile), provider: "gemini", groundingUrls });
     } catch (e: any) {
       console.error("Gemini chat error:", e.message);
       // Auto-fallback to Claude
@@ -1118,7 +1141,7 @@ app.post("/api/chat", async (req, res) => {
   if (useOpenRouter) {
     try {
       const { text } = await callOpenRouterChat(systemPrompt, messages, selectedModel, aiProfile.temperature ?? 0.7, openrouterKey, attachments);
-      return res.json({ content: text, provider: "openrouter" });
+      return res.json({ content: enforceActionBrackets(text, aiProfile), provider: "openrouter" });
     } catch (e: any) {
       console.error("OpenRouter chat error:", e.message);
       // Auto-fallback to Claude
@@ -1177,14 +1200,14 @@ app.post("/api/chat", async (req, res) => {
     );
 
     const text = response.content[0]?.type === "text" ? response.content[0].text : "";
-    res.json({ content: text, provider: "claude" });
+    res.json({ content: enforceActionBrackets(text, aiProfile), provider: "claude" });
   } catch (e: any) {
     // If Claude also fails, try Gemini as last resort
     if (!useGemini) {
       try {
         console.log("Claude failed, trying Gemini fallback...");
         const { text, groundingUrls } = await callGeminiChat(systemPrompt, messages, "gemini-3.5-flash", aiProfile.temperature ?? 0.7, geminiKey, attachments, aiProfile.aiCanUseWebSearch);
-        return res.json({ content: text, provider: "gemini-fallback", groundingUrls });
+        return res.json({ content: enforceActionBrackets(text, aiProfile), provider: "gemini-fallback", groundingUrls });
       } catch (geminiErr: any) {
         console.error("Gemini fallback also failed:", geminiErr.message);
       }
