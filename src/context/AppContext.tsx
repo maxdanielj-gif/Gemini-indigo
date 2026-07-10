@@ -1383,11 +1383,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const id = Math.random().toString(36).substring(2, 9);
     const newToast = { ...toast, id, timestamp: Date.now() };
     setToasts(prev => [...prev, newToast]);
-    
-    // Auto remove after 8 seconds
-    setTimeout(() => {
-      removeToast(id);
-    }, 8000);
+
+    // Error/warning toasts can now carry detailed diagnostic explanations
+    // (e.g. why a response came back empty) — those need real reading time,
+    // so they stay until manually dismissed rather than vanishing after a
+    // few seconds. Success/info messages are short and fine to auto-clear.
+    if (toast.type !== 'error' && toast.type !== 'warning') {
+      setTimeout(() => {
+        removeToast(id);
+      }, 8000);
+    }
   };
 
   const removeToast = (id: string) => {
