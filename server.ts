@@ -237,6 +237,71 @@ async function callGeminiChat(
   return { text, groundingUrls };
 }
 
+// ── OpenRouter client helper ────────────────────────────────────────────────
+// OpenRouter proxies hundreds of models from many vendors behind a single
+// OpenAI-compatible endpoint. Model IDs look like "vendor/model-name"
+// (e.g. "openai/gpt-5.6-luna-pro", "meta-llama/llama-4-scout") — there's no
+// consistent prefix to detect these automatically like there is for Gemini,
+// so this path is only used when the AI Profile explicitly selects it.
+async function callOpenRouterChat(
+  systemPrompt: string,
+  messages: any[],
+  model: string,
+  temperature: number,
+  openrouterKey?: string,
+  attachments?: any[],
+): Promise<{ text: string }> {
+  const apiKey = openrouterKey || process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error("OpenRouter API key not configured. Add OPENROUTER_API_KEY to Render env vars or enter it in Settings.");
+
+  const chatMessages: any[] = [];
+  if (systemPrompt) chatMessages.push({ role: "system", content: systemPrompt });
+
+  messages.forEach((m: any, index: number) => {
+    const role = m.role === "model" ? "assistant" : "user";
+    const isLastUserTurn = role === "user" && index === messages.length - 1;
+
+    if (isLastUserTurn && attachments && attachments.length > 0) {
+      // OpenAI-style multimodal content array — only images are supported
+      // this way; other attachment types get inlined as text, same as the
+      // Gemini/Claude paths do.
+      const parts: any[] = [{ type: "text", text: typeof m.content === "string" ? m.content : JSON.stringify(m.content) }];
+      for (const att of attachments) {
+        if (att.type === "image") {
+          const url = att.content.startsWith("data:") ? att.content : `data:image/jpeg;base64,${att.content}`;
+          parts.push({ type: "image_url", image_url: { url } });
+        } else {
+          const safeContent = att.content?.trim() || "[no text could be extracted]";
+          parts.push({ type: "text", text: `[Attachment: ${att.name}]\n${safeContent}` });
+        }
+      }
+      chatMessages.push({ role, content: parts });
+    } else {
+      chatMessages.push({ role, content: typeof m.content === "string" ? m.content : JSON.stringify(m.content) });
+    }
+  });
+
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model,
+      messages: chatMessages,
+      temperature: temperature ?? 0.7,
+      max_tokens: 2048,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`OpenRouter error (${res.status}): ${err}`);
+  }
+
+  const data = await res.json();
+  const text = data.choices?.[0]?.message?.content || "";
+  return { text };
+}
+
 // ── Knowledge base relevance injection ───────────────────────────────────────
 const STOP_WORDS = new Set([
   "the","a","an","and","or","but","in","on","at","to","for","of","with","by",
@@ -471,14 +536,13 @@ async function generateAndSendProactiveMessage(
     throw new Error("Missing AI profile or user profile.");
   }
 
-  const { chatHistory, aiProfile, userProfile, anthropicApiKey: clientKey, timeZone, userId,
+  const { chatHistory, aiProfile, userProfile, anthropicApiKey: clientKey, geminiKey, openrouterKey, timeZone, userId,
           environmentalContext, triggerTone, triggerReason } = userData;
 
   // Use pushSubscription from request if provided, otherwise look up from stored sync data
   const pushSubscription = userData.pushSubscription || (userId && cloudSyncData[userId]?.pushSubscription) || null;
 
   try {
-    const client = getAnthropicClient(clientKey);
     const now = new Date();
     const timeContext = aiProfile.timeAwareness
       ? `\n[Current time: ${now.toLocaleString("en-US", { timeZone: timeZone || "UTC", weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })}]`
@@ -513,17 +577,7 @@ ${recentHistory}
 
 Your message:`;
 
-    const response = await retry(
-      async () =>
-        await client.messages.create({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 300,
-          messages: [{ role: "user", content: prompt }],
-          temperature: aiProfile.temperature ?? 0.8,
-        })
-    );
-
-    const message = response.content[0]?.type === "text" ? response.content[0].text.trim() : "";
+    const message = (await callActiveProvider(prompt, aiProfile, { anthropicKey: clientKey, geminiKey, openrouterKey }, 300)).trim();
     if (!message) return null;
 
     // Send push notification
@@ -688,6 +742,32 @@ app.post("/api/models/gemini", express.json(), async (req, res) => {
     { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash-Lite' },
   ];
   res.json({ models: CURRENT_GEMINI_CHAT_MODELS });
+});
+
+// ── OpenRouter live catalog ────────────────────────────────────────────────────
+// Unlike Gemini's ListModels endpoint, OpenRouter's /models endpoint is a
+// reliable, public (no auth required) catalog that only lists models you can
+// actually call right now — so we proxy it directly instead of curating a
+// static list. The catalog is large (300+ models across many vendors), so we
+// trim each entry down to just what the picker needs and let the client do
+// the searching/filtering.
+app.get("/api/models/openrouter", async (_req, res) => {
+  try {
+    const r = await fetch("https://openrouter.ai/api/v1/models");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    const models = (data.data || []).map((m: any) => ({
+      id: m.id,
+      name: m.name || m.id,
+      contextLength: m.context_length ?? null,
+      promptPrice: m.pricing?.prompt ?? null,
+      completionPrice: m.pricing?.completion ?? null,
+    }));
+    res.json({ models });
+  } catch (e: any) {
+    console.error("OpenRouter model list error:", e.message);
+    res.status(500).json({ error: e.message || "Failed to fetch OpenRouter models." });
+  }
 });
 
 // ── Web Push ──────────────────────────────────────────────────────────────────
@@ -914,7 +994,7 @@ app.get("/api/sync/:userId?", (req, res) => {
 
 // ── Claude AI: main chat ──────────────────────────────────────────────────────
 app.post("/api/chat", async (req, res) => {
-  const { messages, aiProfile, userProfile, anthropicKey: clientKey, geminiKey, timeZone, attachments, memories, journal, knowledgeBase } = req.body;
+  const { messages, aiProfile, userProfile, anthropicKey: clientKey, geminiKey, openrouterKey, timeZone, attachments, memories, journal, knowledgeBase } = req.body;
   if (!aiProfile || !userProfile) {
     return res.status(400).json({ error: "AI Profile and User Profile are required." });
   }
@@ -933,7 +1013,12 @@ app.post("/api/chat", async (req, res) => {
   }
   
   const baseSystemPrompt = buildSystemPrompt(aiProfile, userProfile, timeZone, memories, journal, knowledgeBase, currentUserMessage);
-  const useGemini = isGeminiModel(selectedModel);
+  // YouTube links force Gemini regardless of the chosen provider (existing
+  // behavior, preserved). OpenRouter is otherwise only used when explicitly
+  // selected — its model IDs (e.g. "meta-llama/llama-4-scout") have no
+  // consistent prefix to detect automatically the way Gemini's do.
+  const useOpenRouter = aiProfile.llmProvider === 'openrouter' && !hasYouTube;
+  const useGemini = !useOpenRouter && isGeminiModel(selectedModel);
 
   // ── Google Tools: background Gemini web search context for Claude ──────────
   let googleToolsContext = '';
@@ -967,6 +1052,8 @@ app.post("/api/chat", async (req, res) => {
   // Provider note — always tells the AI what LLM it's running on
   const providerNote = useGemini
     ? `[System: You are currently running on Gemini (Google). You have the ability to view and discuss YouTube videos when the user shares a YouTube link — do not tell the user you cannot view YouTube links.]`
+    : useOpenRouter
+    ? `[System: You are currently running on "${selectedModel}" via OpenRouter. You cannot view YouTube videos or browse the internet unless a tool result says otherwise.]`
     : `[System: You are currently running on Claude (Anthropic). You cannot view YouTube videos or browse the internet.]`;
 
   // Location + live weather — fetched from Open-Meteo if the client sent coordinates
@@ -1027,6 +1114,18 @@ app.post("/api/chat", async (req, res) => {
     }
   }
 
+  // ── OpenRouter path ──────────────────────────────────────────────────────
+  if (useOpenRouter) {
+    try {
+      const { text } = await callOpenRouterChat(systemPrompt, messages, selectedModel, aiProfile.temperature ?? 0.7, openrouterKey, attachments);
+      return res.json({ content: text, provider: "openrouter" });
+    } catch (e: any) {
+      console.error("OpenRouter chat error:", e.message);
+      // Auto-fallback to Claude
+      console.log("Falling back to Claude...");
+    }
+  }
+
   // ── Claude path (primary, or fallback from Gemini) ────────────────────────
   try {
     const client = getAnthropicClient(clientKey);
@@ -1067,7 +1166,7 @@ app.post("/api/chat", async (req, res) => {
     const response = await retry(
       async () =>
         await client.messages.create({
-          model: validateClaudeModel(useGemini ? undefined : selectedModel),
+          model: validateClaudeModel((useGemini || useOpenRouter) ? undefined : selectedModel),
           max_tokens: aiProfile.maxTokens ?? 2048,
           system: systemPrompt,
           messages: claudeMessages,
@@ -1433,10 +1532,9 @@ app.get("/api/wavespeed/status/:taskId", async (req, res) => {
 
 
 app.post("/api/analyze-persona", async (req, res) => {
-  const { messages, aiProfile, anthropicKey: clientKey } = req.body;
+  const { messages, aiProfile, anthropicKey: clientKey, geminiKey, openrouterKey } = req.body;
   if (!aiProfile || !messages) return res.status(400).json({ error: "AI Profile and messages are required." });
   try {
-    const client = getAnthropicClient(clientKey);
     const prompt = `Analyze this conversation and suggest small, natural updates to this AI persona's "personality" and/or "backstory" fields so they grow alongside the user over time.
 
 Current persona:
@@ -1449,16 +1547,7 @@ ${messages.map((m: any) => `${m.role}: ${m.content}`).join("\n")}
 
 Return ONLY a valid JSON object with updated "personality" and/or "backstory" strings. If no updates are needed, return {}.`;
 
-    const response = await retry(
-      async () =>
-        await client.messages.create({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 500,
-          messages: [{ role: "user", content: prompt }],
-        })
-    );
-
-    const text = response.content[0]?.type === "text" ? response.content[0].text : "{}";
+    const text = await callActiveProvider(prompt, aiProfile, { anthropicKey: clientKey, geminiKey, openrouterKey }, 500);
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     res.json(jsonMatch ? JSON.parse(jsonMatch[0]) : {});
   } catch (e: any) {
@@ -1496,7 +1585,7 @@ function buildBackgroundTaskSystemPrompt(aiProfile: any): string {
 async function callActiveProvider(
   prompt: string,
   aiProfile: any,
-  keys: { anthropicKey?: string; geminiKey?: string },
+  keys: { anthropicKey?: string; geminiKey?: string; openrouterKey?: string },
   maxTokens: number,
 ): Promise<string> {
   const provider = aiProfile.llmProvider || 'claude';
@@ -1514,6 +1603,18 @@ async function callActiveProvider(
     return await Promise.race([task, timer]);
   }
 
+  if (provider === 'openrouter') {
+    // OpenRouter's catalog spans hundreds of models with no consistent
+    // "lightweight" option the way Gemini/Claude have — so background tasks
+    // reuse whichever model the user picked for main chat, rather than
+    // silently substituting a different one that might behave unexpectedly.
+    const task = callOpenRouterChat(buildBackgroundTaskSystemPrompt(aiProfile), [{ role: 'user', content: prompt }], aiProfile.model, 0.7, keys.openrouterKey).then(res => res.text);
+    const timer = new Promise<string>((_, reject) =>
+      setTimeout(() => reject(new Error('OpenRouter background task timed out after 25 seconds')), TIMEOUT_MS)
+    );
+    return await Promise.race([task, timer]);
+  }
+
   // ── Claude (default) ─────────────────────────────────────────────────────
   const client = getAnthropicClient(keys.anthropicKey);
   const response = await client.messages.create({
@@ -1525,7 +1626,7 @@ async function callActiveProvider(
 }
 
 app.post("/api/journal-reflection", async (req, res) => {
-  const { userMsg, aiMsg, aiProfile, userProfile, anthropicKey, geminiKey, timeZone } = req.body;
+  const { userMsg, aiMsg, aiProfile, userProfile, anthropicKey, geminiKey, openrouterKey, timeZone } = req.body;
   try {
     const today = new Date().toLocaleDateString("en-US", { timeZone: timeZone || "UTC", weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
     const personaNote = !aiProfile.knowsItsAI ? " Do not call yourself an AI." : "";
@@ -1537,7 +1638,7 @@ You responded: ${aiMsg}
 
 Journal entry:`;
 
-    const text = await callActiveProvider(prompt, aiProfile, { anthropicKey, geminiKey }, 200);
+    const text = await callActiveProvider(prompt, aiProfile, { anthropicKey, geminiKey, openrouterKey }, 200);
     res.json({ content: text });
   } catch (e: any) {
     console.error("Journal reflection error:", e.message);
@@ -1547,7 +1648,7 @@ Journal entry:`;
 
 // ── Claude AI: memory extraction ──────────────────────────────────────────────
 app.post("/api/memory-extract", async (req, res) => {
-  const { userMsg, aiMsg, aiProfile, userProfile, existingMemories, anthropicKey, geminiKey } = req.body;
+  const { userMsg, aiMsg, aiProfile, userProfile, existingMemories, anthropicKey, geminiKey, openrouterKey } = req.body;
   try {
     const personaNote = !aiProfile.knowsItsAI
       ? `You are ${aiProfile.name} — never refer to yourself as an AI, a language model, or a bot.`
@@ -1568,7 +1669,7 @@ Rules:
 - If nothing new was shared, or it's already in the known list, respond with exactly: NO_MEMORY
 - No other text. No explanation. Just one of those two responses.`;
 
-    const raw = (await callActiveProvider(prompt, aiProfile, { anthropicKey, geminiKey }, 120)).trim();
+    const raw = (await callActiveProvider(prompt, aiProfile, { anthropicKey, geminiKey, openrouterKey }, 120)).trim();
     const memory = raw.startsWith("NEW_MEMORY:")
       ? raw.slice("NEW_MEMORY:".length).trim() || null
       : null;
@@ -1581,7 +1682,7 @@ Rules:
 
 // ── Conversation summarizer ───────────────────────────────────────────────────
 app.post("/api/summarize-chat", async (req, res) => {
-  const { messages, sessionTitle, aiProfile, userProfile, anthropicKey, geminiKey, timeZone } = req.body;
+  const { messages, sessionTitle, aiProfile, userProfile, anthropicKey, geminiKey, openrouterKey, timeZone } = req.body;
   try {
     const date = new Date().toLocaleDateString("en-US", {
       timeZone: timeZone || "UTC", weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
@@ -1617,7 +1718,7 @@ Write the summary using exactly this structure:
 
 Be concise. Skip pleasantries and small talk. Write only what future conversations would benefit from knowing.`;
 
-    const text = await callActiveProvider(prompt, aiProfile, { anthropicKey, geminiKey }, 800);
+    const text = await callActiveProvider(prompt, aiProfile, { anthropicKey, geminiKey, openrouterKey }, 800);
     if (!text) return res.status(204).send();
     res.json({ summary: text });
   } catch (e: any) {
