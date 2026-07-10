@@ -13,6 +13,7 @@ const SettingsScreen: React.FC = () => {
     anthropicApiKey, setAnthropicApiKey,
     elevenLabsApiKey, setElevenLabsApiKey,
     geminiApiKey, setGeminiApiKey,
+    openrouterApiKey, setOpenrouterApiKey,
     autoSaveChat, setAutoSaveChat, autoSaveChatInterval, setAutoSaveChatInterval,
     autoJsonBackup, setAutoJsonBackup, autoJsonBackupInterval, setAutoJsonBackupInterval,
     resetApp, aiProfile, userProfile,
@@ -49,6 +50,7 @@ const SettingsScreen: React.FC = () => {
   const [localAnthropicApiKey,    setLocalAnthropicApiKey]    = useState(anthropicApiKey || '');
   const [localElevenLabsApiKey,   setLocalElevenLabsApiKey]   = useState(elevenLabsApiKey || '');
   const [localGeminiApiKey,       setLocalGeminiApiKey]       = useState(geminiApiKey || '');
+  const [localOpenrouterApiKey,   setLocalOpenrouterApiKey]   = useState(openrouterApiKey || '');
   const [localWavespeedApiKey,    setLocalWavespeedApiKey]    = useState(wavespeedApiKey || '');
   const [isFirebaseBackingUp,  setIsFirebaseBackingUp]  = useState(false);
   const [isFirebaseRestoring,  setIsFirebaseRestoring]  = useState(false);
@@ -89,6 +91,7 @@ const SettingsScreen: React.FC = () => {
   React.useEffect(() => { setLocalAnthropicApiKey(anthropicApiKey || ''); }, [anthropicApiKey]);
   React.useEffect(() => { setLocalElevenLabsApiKey(elevenLabsApiKey || ''); }, [elevenLabsApiKey]);
   React.useEffect(() => { setLocalGeminiApiKey(geminiApiKey || ''); }, [geminiApiKey]);
+  React.useEffect(() => { setLocalOpenrouterApiKey(openrouterApiKey || ''); }, [openrouterApiKey]);
   React.useEffect(() => { setLocalWavespeedApiKey(wavespeedApiKey || ''); }, [wavespeedApiKey]);
   const [localSyncId,          setLocalSyncId]          = useState(userId || '');
   const [isExporting,          setIsExporting]          = useState(false);
@@ -144,6 +147,11 @@ const SettingsScreen: React.FC = () => {
   const handleSaveGeminiKey = () => {
     setGeminiApiKey(localGeminiApiKey.trim() || null);
     addToast({ title: 'Saved', message: 'Gemini API key saved.', type: 'success' });
+  };
+
+  const handleSaveOpenrouterKey = () => {
+    setOpenrouterApiKey(localOpenrouterApiKey.trim() || null);
+    addToast({ title: 'Saved', message: 'OpenRouter API key saved.', type: 'success' });
   };
 
   const handleSaveWavespeedKey = () => {
@@ -539,6 +547,29 @@ const SettingsScreen: React.FC = () => {
               </div>
               <p className="text-xs text-indigo-500 dark:text-indigo-400 mt-1">
                 Get a key at <a href="https://aistudio.google.com" target="_blank" rel="noreferrer" className="underline">aistudio.google.com</a>. Enables Gemini models in AI Profile settings, and auto-fallback if Claude is unavailable.
+              </p>
+            </div>
+
+            {/* OpenRouter */}
+            <div>
+              <label className="block text-sm font-medium text-indigo-700 dark:text-indigo-300 mb-1">
+                OpenRouter API Key <span className="text-indigo-400 dark:text-indigo-500 font-normal">(optional — access hundreds of models from one key)</span>
+              </label>
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-400" />
+                  <input
+                    type="password"
+                    value={localOpenrouterApiKey}
+                    onChange={(e) => setLocalOpenrouterApiKey(e.target.value)}
+                    placeholder="Your OpenRouter API key"
+                    className="app-input pl-9"
+                  />
+                </div>
+                <button onClick={handleSaveOpenrouterKey} className="app-btn-primary">Save</button>
+              </div>
+              <p className="text-xs text-indigo-500 dark:text-indigo-400 mt-1">
+                Get a key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" className="underline">openrouter.ai/keys</a>. Requires prepaid credit on your OpenRouter account. Enables OpenRouter as an AI Provider option in AI Profile settings, with a searchable catalog of 300+ models.
               </p>
             </div>
 

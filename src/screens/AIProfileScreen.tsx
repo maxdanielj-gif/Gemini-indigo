@@ -30,7 +30,7 @@ const AIProfileScreen: React.FC = () => {
   const {
     aiProfile, setAIProfile, savePersona, deletePersona, savedPersonas, loadPersona,
     setAmbientMode, setAmbientFrequency, addToast,
-    anthropicApiKey, elevenLabsApiKey, geminiApiKey, userId,
+    anthropicApiKey, elevenLabsApiKey, geminiApiKey, openrouterApiKey, userId,
   } = useApp();
   const { chatHistory, sessions, activeSessionId, setChatHistory, setSessions, setActiveSessionId } = useChat();
   const [name, setName] = useState(aiProfile.name);
@@ -142,11 +142,12 @@ const AIProfileScreen: React.FC = () => {
   // the fetch fails or no key is saved yet.
   const [liveClaudeModels, setLiveClaudeModels] = useState<{ id: string; name: string }[] | null>(null);
   const [liveGeminiModels, setLiveGeminiModels] = useState<{ id: string; name: string }[] | null>(null);
+  const [liveOpenRouterModels, setLiveOpenRouterModels] = useState<{ id: string; name: string; contextLength?: number | null; promptPrice?: string | null; completionPrice?: string | null }[] | null>(null);
   const [isRefreshingModels, setIsRefreshingModels] = useState(false);
 
   const refreshModelLists = useCallback(async () => {
     setIsRefreshingModels(true);
-    const [claudeResult, geminiResult] = await Promise.allSettled([
+    const [claudeResult, geminiResult, openrouterResult] = await Promise.allSettled([
       anthropicApiKey
         ? fetch('/api/models/claude', {
             method: 'POST',
@@ -161,12 +162,18 @@ const AIProfileScreen: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       }).then(r => (r.ok ? r.json() : Promise.reject(new Error('failed')))),
+      // OpenRouter's catalog is public — no API key needed to browse it,
+      // only to actually chat with a model.
+      fetch('/api/models/openrouter').then(r => (r.ok ? r.json() : Promise.reject(new Error('failed')))),
     ]);
     if (claudeResult.status === 'fulfilled' && Array.isArray(claudeResult.value.models) && claudeResult.value.models.length > 0) {
       setLiveClaudeModels(claudeResult.value.models);
     }
     if (geminiResult.status === 'fulfilled' && Array.isArray(geminiResult.value.models) && geminiResult.value.models.length > 0) {
       setLiveGeminiModels(geminiResult.value.models);
+    }
+    if (openrouterResult.status === 'fulfilled' && Array.isArray(openrouterResult.value.models) && openrouterResult.value.models.length > 0) {
+      setLiveOpenRouterModels(openrouterResult.value.models);
     }
     setIsRefreshingModels(false);
   }, [anthropicApiKey]);
@@ -178,9 +185,23 @@ const AIProfileScreen: React.FC = () => {
   const claudeModelOptions = liveClaudeModels && liveClaudeModels.length > 0 ? liveClaudeModels : FALLBACK_CLAUDE_MODELS;
   const geminiModelOptions = liveGeminiModels && liveGeminiModels.length > 0 ? liveGeminiModels : FALLBACK_GEMINI_MODELS;
 
+  // OpenRouter's catalog is large (300+ models), so instead of a native
+  // dropdown we show a search box that filters down to matching results —
+  // much easier to use on a phone than scrolling a huge <select>.
+  const [openRouterSearch, setOpenRouterSearch] = useState('');
+  const openRouterModelOptions = liveOpenRouterModels || [];
+  const filteredOpenRouterModels = (() => {
+    const q = openRouterSearch.trim().toLowerCase();
+    if (!q) return openRouterModelOptions.slice(0, 40);
+    return openRouterModelOptions
+      .filter(m => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q))
+      .slice(0, 40);
+  })();
+
   const [model, setModel] = useState(validateModel(aiProfile.model));
-  const [llmProvider, setLlmProvider] = useState<'claude' | 'gemini'>(
-    (aiProfile.llmProvider === 'gemini' ? 'gemini' : 'claude')
+  const selectedOpenRouterModel = openRouterModelOptions.find(m => m.id === model);
+  const [llmProvider, setLlmProvider] = useState<'claude' | 'gemini' | 'openrouter'>(
+    (aiProfile.llmProvider === 'gemini' ? 'gemini' : aiProfile.llmProvider === 'openrouter' ? 'openrouter' : 'claude')
   );
   const [temperature, setTemperature] = useState(aiProfile.temperature || 0.7);
   const [timeAwareness, setTimeAwareness] = useState<boolean>(aiProfile.timeAwareness ?? true);
@@ -598,7 +619,7 @@ const AIProfileScreen: React.FC = () => {
         const previewProfile = {
           ...aiProfile,
           name, personality, backstory, appearance, responseLength,
-          customParagraphCount, model, temperature,
+          customParagraphCount, model, llmProvider, temperature,
           knowsItsAI,
         };
         const res = await fetch('/api/chat', {
@@ -612,6 +633,7 @@ const AIProfileScreen: React.FC = () => {
             userProfile: { name: 'User', email: '', info: '', preferences: '', appearance: '', referenceImage: null },
             anthropicKey: anthropicApiKey || undefined,
             geminiKey: geminiApiKey || undefined,
+            openrouterKey: openrouterApiKey || undefined,
           }),
         });
         if (!res.ok) throw new Error((await res.json()).error || 'Failed');
@@ -620,11 +642,11 @@ const AIProfileScreen: React.FC = () => {
         setPreviewMessages(prev => [...prev, { role: 'model', content: responseText }]);
     } catch (error) {
         console.error("Preview chat error", error);
-        setPreviewMessages(prev => [...prev, { role: 'model', content: "Error: Failed to generate response. Check your Anthropic API key in Settings." }]);
+        setPreviewMessages(prev => [...prev, { role: 'model', content: "Error: Failed to generate response. Check your API key in Settings." }]);
     } finally {
         setIsPreviewLoading(false);
     }
-  }, [previewInput, isPreviewLoading, anthropicApiKey, name, personality, backstory, appearance, responseLength, customParagraphCount, model, temperature, previewMessages, knowsItsAI, aiProfile]);
+  }, [previewInput, isPreviewLoading, anthropicApiKey, geminiApiKey, openrouterApiKey, name, personality, backstory, appearance, responseLength, customParagraphCount, model, llmProvider, temperature, previewMessages, knowsItsAI, aiProfile]);
 
   const handleImageUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1391,16 +1413,18 @@ const AIProfileScreen: React.FC = () => {
                             <select
                                 value={llmProvider}
                                 onChange={(e) => {
-                                  const p = e.target.value as 'claude' | 'gemini';
+                                  const p = e.target.value as 'claude' | 'gemini' | 'openrouter';
                                   setLlmProvider(p);
                                   // Reset model to a sensible default for the new provider
                                   if (p === 'claude') setModel('claude-sonnet-5');
                                   else if (p === 'gemini') setModel('gemini-3.5-flash');
+                                  else if (p === 'openrouter') setModel('');
                                 }}
                                 className="w-full p-2 border border-indigo-300 dark:border-indigo-700 rounded-md bg-white dark:bg-indigo-900 text-indigo-900 dark:text-indigo-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                             >
                                 <option value="claude">Anthropic Claude</option>
                                 <option value="gemini">Google Gemini</option>
+                                <option value="openrouter">OpenRouter</option>
                             </select>
                         </div>
 
@@ -1413,7 +1437,7 @@ const AIProfileScreen: React.FC = () => {
                                     onClick={refreshModelLists}
                                     disabled={isRefreshingModels}
                                     className="text-xs text-indigo-500 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-200 disabled:opacity-50 flex items-center gap-1"
-                                    title="Fetch the latest models directly from Anthropic/Google"
+                                    title="Fetch the latest models directly from Anthropic/Google/OpenRouter"
                                 >
                                     {isRefreshingModels ? 'Refreshing…' : '↻ Refresh list'}
                                 </button>
@@ -1442,8 +1466,60 @@ const AIProfileScreen: React.FC = () => {
                                     ))}
                                 </select>
                             )}
+
+                            {llmProvider === 'openrouter' && (
+                                <div>
+                                    {selectedOpenRouterModel ? (
+                                        <div className="flex items-center justify-between p-2 mb-2 rounded-md bg-indigo-50 dark:bg-indigo-900/50 border border-indigo-200 dark:border-indigo-700">
+                                            <div className="min-w-0">
+                                                <div className="text-sm font-medium text-indigo-900 dark:text-indigo-100 truncate">{selectedOpenRouterModel.name}</div>
+                                                <div className="text-[11px] text-indigo-400 dark:text-indigo-500 truncate">{selectedOpenRouterModel.id}</div>
+                                            </div>
+                                            <button type="button" onClick={() => setModel('')} className="text-xs text-indigo-500 hover:text-indigo-700 dark:hover:text-indigo-300 flex-shrink-0 ml-2">Change</button>
+                                        </div>
+                                    ) : model ? (
+                                        <div className="flex items-center justify-between p-2 mb-2 rounded-md bg-indigo-50 dark:bg-indigo-900/50 border border-indigo-200 dark:border-indigo-700">
+                                            <div className="text-sm font-medium text-indigo-900 dark:text-indigo-100 truncate">{model}</div>
+                                            <button type="button" onClick={() => setModel('')} className="text-xs text-indigo-500 hover:text-indigo-700 dark:hover:text-indigo-300 flex-shrink-0 ml-2">Change</button>
+                                        </div>
+                                    ) : null}
+
+                                    {!model && (
+                                        <>
+                                            <input
+                                                type="text"
+                                                value={openRouterSearch}
+                                                onChange={(e) => setOpenRouterSearch(e.target.value)}
+                                                placeholder={openRouterModelOptions.length > 0 ? `Search ${openRouterModelOptions.length}+ models… e.g. gpt, llama, deepseek` : 'Loading catalog…'}
+                                                className="w-full p-2 border border-indigo-300 dark:border-indigo-700 rounded-md bg-white dark:bg-indigo-900 text-indigo-900 dark:text-indigo-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 mb-1"
+                                            />
+                                            <div className="max-h-56 overflow-y-auto border border-indigo-200 dark:border-indigo-700 rounded-md divide-y divide-indigo-100 dark:divide-indigo-800">
+                                                {filteredOpenRouterModels.length === 0 && (
+                                                    <div className="p-3 text-xs text-indigo-400 dark:text-indigo-500 text-center">
+                                                        {openRouterModelOptions.length === 0 ? 'Catalog not loaded yet — tap "Refresh list" above.' : 'No matches.'}
+                                                    </div>
+                                                )}
+                                                {filteredOpenRouterModels.map(m => (
+                                                    <button
+                                                        key={m.id}
+                                                        type="button"
+                                                        onClick={() => { setModel(m.id); setOpenRouterSearch(''); }}
+                                                        className="w-full text-left p-2 hover:bg-indigo-50 dark:hover:bg-indigo-800 transition-colors"
+                                                    >
+                                                        <div className="text-sm text-indigo-900 dark:text-indigo-100 truncate">{m.name}</div>
+                                                        <div className="text-[11px] text-indigo-400 dark:text-indigo-500 truncate">{m.id}{m.contextLength ? ` · ${(m.contextLength / 1000).toFixed(0)}K context` : ''}</div>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                            {openRouterModelOptions.length > 0 && filteredOpenRouterModels.length === 40 && (
+                                                <p className="text-[11px] text-indigo-400 dark:text-indigo-500 mt-1">Showing first 40 matches — keep typing to narrow it down.</p>
+                                            )}
+                                        </>
+                                    )}
+                                </div>
+                            )}
                             <p className="text-[11px] text-indigo-400 dark:text-indigo-500 mt-1">
-                                {liveClaudeModels || liveGeminiModels
+                                {liveClaudeModels || liveGeminiModels || liveOpenRouterModels
                                     ? "Showing the current model list from your provider."
                                     : "Showing a built-in default list — add an API key above to load the current list automatically."}
                             </p>

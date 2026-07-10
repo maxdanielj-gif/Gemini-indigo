@@ -15,7 +15,7 @@ const ChatScreen: React.FC = () => {
   const { 
     aiProfile, userProfile, knowledgeBase, 
     addToKnowledgeBase, personaKnowledgeBase, addToGallery, apiKey,
-    anthropicApiKey, geminiApiKey, elevenLabsApiKey, userLocation, userMotion,
+    anthropicApiKey, geminiApiKey, openrouterApiKey, elevenLabsApiKey, userLocation, userMotion,
     memories, journal, isPersonaSwitching,
     addJournalEntry, addMemory, showTimestamps, timeZone, addToast,
     setAIProfile, setLastInteractionTime
@@ -307,6 +307,7 @@ const ChatScreen: React.FC = () => {
             modelId: aiProfile.geminiTtsModel || 'gemini-3.1-flash-tts-preview',
             stylePrompt: aiProfile.geminiTtsStyle || undefined,
             geminiKey: geminiApiKey || undefined,
+            openrouterKey: openrouterApiKey || undefined,
           }),
         });
         if (!r.ok) {
@@ -453,6 +454,7 @@ const ChatScreen: React.FC = () => {
           userProfile,
           anthropicKey: anthropicApiKey || undefined,
           geminiKey: geminiApiKey || undefined,
+            openrouterKey: openrouterApiKey || undefined,
           attachments: attachments.length > 0 ? attachments : undefined,
           timeZone,
           userLocation: userLocation || undefined,
@@ -519,6 +521,7 @@ const ChatScreen: React.FC = () => {
             aiProfile, userProfile, timeZone,
             anthropicKey: anthropicApiKey || undefined,
             geminiKey: geminiApiKey || undefined,
+            openrouterKey: openrouterApiKey || undefined,
           }),
         });
         if (res.ok) {
@@ -560,6 +563,7 @@ const ChatScreen: React.FC = () => {
           existingMemories: memories,
           anthropicKey: anthropicApiKey || undefined,
           geminiKey: geminiApiKey || undefined,
+            openrouterKey: openrouterApiKey || undefined,
         }),
       });
       if (res.ok) {
@@ -713,6 +717,7 @@ const ChatScreen: React.FC = () => {
           timeZone,
           anthropicKey: anthropicApiKey || undefined,
           geminiKey: geminiApiKey || undefined,
+            openrouterKey: openrouterApiKey || undefined,
         }),
       });
 
