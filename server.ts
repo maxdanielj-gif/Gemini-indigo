@@ -666,27 +666,28 @@ app.post("/api/models/claude", express.json(), async (req, res) => {
 });
 
 app.post("/api/models/gemini", express.json(), async (req, res) => {
-  const apiKey = req.body?.key || process.env.GEMINI_API_KEY;
-  if (!apiKey) return res.status(400).json({ error: "No Gemini key available." });
-  try {
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}&pageSize=200`);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data = await r.json();
-    const models = (data.models || [])
-      // Only keep models this app can actually chat with — Google's list
-      // also includes embedding, image-only, TTS, and other special-purpose
-      // models that would just fail if picked here.
-      .filter((m: any) => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes("generateContent"))
-      .filter((m: any) => !/embedding|aqa|image|tts|live/i.test(m.name))
-      .map((m: any) => ({
-        id: (m.name || "").replace(/^models\//, ""),
-        name: m.displayName || (m.name || "").replace(/^models\//, ""),
-      }));
-    res.json({ models });
-  } catch (e: any) {
-    console.error("Gemini model list error:", e.message);
-    res.status(500).json({ error: e.message || "Failed to fetch Gemini models." });
-  }
+  // NOTE: We deliberately do NOT proxy Google's raw ListModels endpoint here.
+  // In practice it keeps listing model IDs long after Google has actually
+  // shut them down (confirmed against Google's own changelog — e.g.
+  // gemini-2.0-flash, gemini-1.5-*, and several preview models all remained
+  // listed well after their shutdown dates), so filtering it heuristically
+  // produced a dropdown where most entries didn't actually work.
+  //
+  // Instead we serve the small, curated "Supported models" list straight
+  // from Google's own Interactions API documentation, which only lists
+  // models confirmed to be currently callable. Update this list if Google
+  // publishes a new one — that's a more reliable signal than the API's own
+  // model registry.
+  const CURRENT_GEMINI_CHAT_MODELS = [
+    { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash' },
+    { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview' },
+    { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash-Lite' },
+    { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash Preview' },
+    { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro' },
+    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
+    { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash-Lite' },
+  ];
+  res.json({ models: CURRENT_GEMINI_CHAT_MODELS });
 });
 
 // ── Web Push ──────────────────────────────────────────────────────────────────
