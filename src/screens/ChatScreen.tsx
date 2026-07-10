@@ -473,6 +473,19 @@ const ChatScreen: React.FC = () => {
       const data = await res.json();
       const responseText = data.content || "";
 
+      // Defense in depth: the server now throws a descriptive error whenever
+      // a provider comes back with genuinely empty text, so this should be
+      // rare — but if it ever slips through, don't silently drop an empty
+      // bubble into the chat with no explanation.
+      if (!responseText.trim()) {
+        addToast({
+          title: "Empty response",
+          message: `${aiProfile.name} returned an empty response with no error reported. This is unusual — try resending, or switch models in AI Profile settings if it keeps happening.`,
+          type: "error",
+        });
+        return;
+      }
+
       const modelMessage = {
         id: (Date.now() + 1).toString() + Math.random().toString(36).substr(2, 9),
         role: 'model' as const,
