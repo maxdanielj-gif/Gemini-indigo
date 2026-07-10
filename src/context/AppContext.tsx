@@ -297,7 +297,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [autoSaveChat, setAutoSaveChatState] = useState(true);
   const [autoSaveChatInterval, setAutoSaveChatInterval] = useState(30); // Default 30 seconds
   const [autoJsonBackup, setAutoJsonBackupState] = useState(false);
-  const [autoJsonBackupInterval, setAutoJsonBackupInterval] = useState(5); // Default 5 minutes
+  const [autoJsonBackupInterval, setAutoJsonBackupIntervalState] = useState(5); // Default 5 minutes
   const [isSyncEnabled, setIsSyncEnabled] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncFrequency, setSyncFrequency] = useState(5); // Default 5 minutes
@@ -846,7 +846,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 setAutoSaveChatState(savedData.autoSaveChat !== undefined ? savedData.autoSaveChat : true);
                 setAutoSaveChatInterval(savedData.autoSaveChatInterval !== undefined ? savedData.autoSaveChatInterval : 30);
                 setAutoJsonBackupState(savedData.autoJsonBackup !== undefined ? savedData.autoJsonBackup : false);
-                setAutoJsonBackupInterval(savedData.autoJsonBackupInterval !== undefined ? savedData.autoJsonBackupInterval : 5);
+                setAutoJsonBackupIntervalState(savedData.autoJsonBackupInterval !== undefined ? savedData.autoJsonBackupInterval : 5);
                 setIsSyncEnabled(savedData.isSyncEnabled !== undefined ? savedData.isSyncEnabled : false);
                 setSyncFrequency(savedData.syncFrequency !== undefined ? savedData.syncFrequency : 5);
                 setNotificationsEnabledState(savedData.notificationsEnabled !== undefined ? savedData.notificationsEnabled : (typeof Notification !== 'undefined' && Notification.permission === 'granted'));
@@ -1838,7 +1838,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setApiKeyState(parsed.apiKey || null);
       setFcmTokenState(parsed.fcmToken || null);
       setAutoSaveChatInterval(parsed.autoSaveChatInterval !== undefined ? parsed.autoSaveChatInterval : 30);
-      setAutoJsonBackupInterval(parsed.autoJsonBackupInterval !== undefined ? parsed.autoJsonBackupInterval : 5);
+      setAutoJsonBackupIntervalState(parsed.autoJsonBackupInterval !== undefined ? parsed.autoJsonBackupInterval : 5);
       setProactiveMessageFrequency(parsed.proactiveMessageFrequency !== undefined ? parsed.proactiveMessageFrequency : 'off');
       setNotificationsEnabledState(parsed.notificationsEnabled !== undefined ? parsed.notificationsEnabled : (typeof Notification !== 'undefined' && Notification.permission === 'granted'));
       setShowTimestampsState(parsed.showTimestamps !== undefined ? parsed.showTimestamps : true);
@@ -1930,7 +1930,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUserId(id);
     localStorage.setItem('indigo_user_id', id);
   };
-  const setAutoJsonBackup = (enabled: boolean) => setAutoJsonBackupState(enabled);
+  const setAutoJsonBackup = (enabled: boolean) => {
+    setAutoJsonBackupState(enabled);
+    loadFromDB('indigo_app_data_core').then((core: any) => {
+      if (core) saveToDB('indigo_app_data_core', { ...core, autoJsonBackup: enabled });
+    }).catch(() => {});
+  };
+  const setAutoJsonBackupInterval = (interval: number) => {
+    setAutoJsonBackupIntervalState(interval);
+    loadFromDB('indigo_app_data_core').then((core: any) => {
+      if (core) saveToDB('indigo_app_data_core', { ...core, autoJsonBackupInterval: interval });
+    }).catch(() => {});
+  };
   const setNotificationsEnabled = (enabled: boolean) => setNotificationsEnabledState(enabled);
   const setIsDebuggerEnabled = (enabled: boolean) => {
     console.log(`setIsDebuggerEnabled called with: ${enabled}`);
@@ -1970,7 +1981,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setAutoSaveChatState(true);
           setAutoSaveChatInterval(30);
           setAutoJsonBackupState(false);
-          setAutoJsonBackupInterval(5);
+          setAutoJsonBackupIntervalState(5);
           setAIProfileState(prev => ({ ...prev, proactiveMessageFrequency: 'off', timeAwareness: true, ambientMode: false, ambientFrequency: 'off' }));
           setTimeZoneState(Intl.DateTimeFormat().resolvedOptions().timeZone);
           setShowTutorial(false);
