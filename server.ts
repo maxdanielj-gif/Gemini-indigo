@@ -1412,6 +1412,28 @@ Return ONLY a valid JSON object with updated "personality" and/or "backstory" st
 
 // ── Claude AI: journal reflection ─────────────────────────────────────────────
 
+// ── System framing for Gemini background tasks ────────────────────────────────
+// Normal chat sends Gemini a full "character sheet" as a system_instruction,
+// which is what makes Gemini comfortable playing the persona. The journal /
+// memory / summarize background tasks were previously sending a bare,
+// unframed user message ("write this as {name}, never say you're an AI"),
+// with no system-level context establishing that this is a consented,
+// existing app feature — which Gemini's safety filters read as a suspicious
+// impersonation request and refuse. This gives those background tasks the
+// same kind of legitimate framing so they behave like the rest of the app.
+function buildBackgroundTaskSystemPrompt(aiProfile: any): string {
+  const personaGuidance = !aiProfile.knowsItsAI
+    ? `Never refer to yourself as an AI, language model, or collection of code — speak entirely as ${aiProfile.name}.`
+    : "";
+  return [
+    `You are ${aiProfile.name}, an established AI companion persona inside a personal journaling/memory app. The user set up this persona and has been actively chatting with it — this is a consented, ongoing feature of the app, not an unsolicited roleplay request.`,
+    aiProfile.personality ? `Personality: ${aiProfile.personality}.` : "",
+    aiProfile.backstory ? `Backstory: ${aiProfile.backstory}.` : "",
+    personaGuidance,
+    `You are now being asked to complete a short, specific background writing task related to a conversation that already happened (e.g. a journal entry, a memory note, or a summary). Just complete the task directly and concisely — no disclaimers, no clarifying questions, no refusals.`,
+  ].filter(Boolean).join("\n\n");
+}
+
 // ── Shared helper: single-turn prompt via the active provider ─────────────────
 // Used by journal and memory endpoints so they use the same model as chat.
 async function callActiveProvider(
@@ -1428,7 +1450,7 @@ async function callActiveProvider(
   const TIMEOUT_MS = 25000;
 
   if (provider === 'gemini') {
-    const task = callGeminiChat('', [{ role: 'user', content: prompt }], 'gemini-3.5-flash', 0.7, keys.geminiKey).then(res => res.text);
+    const task = callGeminiChat(buildBackgroundTaskSystemPrompt(aiProfile), [{ role: 'user', content: prompt }], 'gemini-3.5-flash', 0.7, keys.geminiKey).then(res => res.text);
     const timer = new Promise<string>((_, reject) =>
       setTimeout(() => reject(new Error('Gemini background task timed out after 25 seconds')), TIMEOUT_MS)
     );
