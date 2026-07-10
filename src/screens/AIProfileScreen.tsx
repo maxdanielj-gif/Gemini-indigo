@@ -124,8 +124,9 @@ const AIProfileScreen: React.FC = () => {
     { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku (Fastest)' },
   ];
   const FALLBACK_GEMINI_MODELS = [
-    { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash (Fast)' },
-    { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro (Capable)' },
+    { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash' },
+    { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview' },
+    { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash-Lite' },
     { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
   ];
   // Accept any model string
@@ -153,13 +154,13 @@ const AIProfileScreen: React.FC = () => {
             body: JSON.stringify({ key: anthropicApiKey }),
           }).then(r => (r.ok ? r.json() : Promise.reject(new Error('failed'))))
         : Promise.reject(new Error('no key')),
-      geminiApiKey
-        ? fetch('/api/models/gemini', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key: geminiApiKey }),
-          }).then(r => (r.ok ? r.json() : Promise.reject(new Error('failed'))))
-        : Promise.reject(new Error('no key')),
+      // Gemini's list is a curated static list on our own server (see
+      // /api/models/gemini) — no API key is needed just to fetch it.
+      fetch('/api/models/gemini', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }).then(r => (r.ok ? r.json() : Promise.reject(new Error('failed')))),
     ]);
     if (claudeResult.status === 'fulfilled' && Array.isArray(claudeResult.value.models) && claudeResult.value.models.length > 0) {
       setLiveClaudeModels(claudeResult.value.models);
@@ -168,7 +169,7 @@ const AIProfileScreen: React.FC = () => {
       setLiveGeminiModels(geminiResult.value.models);
     }
     setIsRefreshingModels(false);
-  }, [anthropicApiKey, geminiApiKey]);
+  }, [anthropicApiKey]);
 
   // Fetch once on load — quietly falls back to the static lists if it fails,
   // so this never blocks or breaks the screen.
