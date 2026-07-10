@@ -273,6 +273,7 @@ async function callOpenRouterChat(
   temperature: number,
   openrouterKey?: string,
   attachments?: any[],
+  reasoningEffort?: 'low' | 'minimal' | 'none',
 ): Promise<{ text: string }> {
   const apiKey = openrouterKey || process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("OpenRouter API key not configured. Add OPENROUTER_API_KEY to Render env vars or enter it in Settings.");
@@ -312,6 +313,9 @@ async function callOpenRouterChat(
       messages: chatMessages,
       temperature: temperature ?? 0.7,
       max_tokens: 2048,
+      // OpenRouter normalizes this across providers — models that don't
+      // support tuning reasoning effort simply ignore the field.
+      ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
     }),
   });
 
@@ -1613,10 +1617,14 @@ async function callActiveProvider(
 ): Promise<string> {
   const provider = aiProfile.llmProvider || 'claude';
 
-  // Background tasks (memory, journal, summarize) always use lightweight models
-  // regardless of what the user chose for main chat. This avoids timeouts from
-  // slower Pro/Preview models and keeps costs low for these simple extraction jobs.
+  // Background tasks (memory, journal, summarize) use lightweight models for
+  // Gemini/Claude regardless of what the user chose for main chat, which
+  // keeps these fast and cheap. OpenRouter has no equivalent "lightweight
+  // default" across its whole catalog, so it reuses the user's chosen model —
+  // which means it can legitimately be a slower reasoning model, so it gets
+  // a longer timeout and a request to keep reasoning effort low.
   const TIMEOUT_MS = 25000;
+  const OPENROUTER_TIMEOUT_MS = 55000;
 
   if (provider === 'gemini') {
     const task = callGeminiChat(buildBackgroundTaskSystemPrompt(aiProfile), [{ role: 'user', content: prompt }], 'gemini-3.5-flash', 0.7, keys.geminiKey).then(res => res.text);
@@ -1631,9 +1639,13 @@ async function callActiveProvider(
     // "lightweight" option the way Gemini/Claude have — so background tasks
     // reuse whichever model the user picked for main chat, rather than
     // silently substituting a different one that might behave unexpectedly.
-    const task = callOpenRouterChat(buildBackgroundTaskSystemPrompt(aiProfile), [{ role: 'user', content: prompt }], aiProfile.model, 0.7, keys.openrouterKey).then(res => res.text);
+    // We do ask for low reasoning effort though, since a journal entry or
+    // memory note doesn't need the model to think hard — this meaningfully
+    // cuts latency on reasoning-capable models without changing which model
+    // is used.
+    const task = callOpenRouterChat(buildBackgroundTaskSystemPrompt(aiProfile), [{ role: 'user', content: prompt }], aiProfile.model, 0.7, keys.openrouterKey, undefined, 'low').then(res => res.text);
     const timer = new Promise<string>((_, reject) =>
-      setTimeout(() => reject(new Error('OpenRouter background task timed out after 25 seconds')), TIMEOUT_MS)
+      setTimeout(() => reject(new Error('OpenRouter background task timed out after 55 seconds — this model may be too slow for background tasks like journal/memory generation. Consider picking a faster model.')), OPENROUTER_TIMEOUT_MS)
     );
     return await Promise.race([task, timer]);
   }
