@@ -53,6 +53,8 @@ interface AppState {
   setElevenLabsApiKey: (key: string | null) => void;
   geminiApiKey: string | null;
   setGeminiApiKey: (key: string | null) => void;
+  openrouterApiKey: string | null;
+  setOpenrouterApiKey: (key: string | null) => void;
   wavespeedApiKey: string | null;
   setWavespeedApiKey: (key: string | null) => void;
   lastInteractionTime: number;
@@ -290,6 +292,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [anthropicApiKey, setAnthropicApiKeyState] = useState<string | null>(null);
   const [elevenLabsApiKey, setElevenLabsApiKeyState] = useState<string | null>(null);
   const [geminiApiKey, setGeminiApiKeyState] = useState<string | null>(null);
+  const [openrouterApiKey, setOpenrouterApiKeyState] = useState<string | null>(null);
   const [wavespeedApiKey, setWavespeedApiKeyState] = useState<string | null>(null);
   const [autoSaveChat, setAutoSaveChatState] = useState(true);
   const [autoSaveChatInterval, setAutoSaveChatInterval] = useState(30); // Default 30 seconds
@@ -819,6 +822,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 setAnthropicApiKeyState(savedData.anthropicApiKey || null);
                 setElevenLabsApiKeyState(savedData.elevenLabsApiKey || null);
                 setGeminiApiKeyState(savedData.geminiApiKey || null);
+                setOpenrouterApiKeyState(savedData.openrouterApiKey || null);
                 setWavespeedApiKeyState(savedData.wavespeedApiKey || null);
 
                 setLastCloudSyncTimeState(savedData.lastCloudSyncTime || null);
@@ -914,6 +918,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           anthropicApiKey,
           elevenLabsApiKey,
           geminiApiKey,
+          openrouterApiKey,
           wavespeedApiKey,
           lastCloudSyncTime,
           lastFirebaseBackupTime,
@@ -976,14 +981,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // Debounce save to avoid excessive writes
-  }, [aiProfile, savedPersonas, userProfile, gallery, journal, knowledgeBase, memories, apiKey, anthropicApiKey, elevenLabsApiKey, geminiApiKey, wavespeedApiKey, fcmToken, autoSaveChat, autoJsonBackup, isLoaded, lastInteractionTime, userId, firebaseApiKey, firebaseAuthDomain, firebaseProjectId, firebaseStorageBucket, firebaseMessagingSenderId, firebaseAppId]);
+  }, [aiProfile, savedPersonas, userProfile, gallery, journal, knowledgeBase, memories, apiKey, anthropicApiKey, elevenLabsApiKey, geminiApiKey, openrouterApiKey, wavespeedApiKey, fcmToken, autoSaveChat, autoJsonBackup, isLoaded, lastInteractionTime, userId, firebaseApiKey, firebaseAuthDomain, firebaseProjectId, firebaseStorageBucket, firebaseMessagingSenderId, firebaseAppId]);
 
   // Debounce save to avoid excessive writes
   useEffect(() => {
     if (!isLoaded) return;
     const timeoutId = setTimeout(saveData, 1000);
     return () => clearTimeout(timeoutId);
-  }, [aiProfile, savedPersonas, userProfile, gallery, journal, knowledgeBase, memories, apiKey, anthropicApiKey, elevenLabsApiKey, geminiApiKey, wavespeedApiKey, fcmToken, autoSaveChat, autoJsonBackup, isLoaded, lastInteractionTime, userId, firebaseApiKey, firebaseAuthDomain, firebaseProjectId, firebaseStorageBucket, firebaseMessagingSenderId, firebaseAppId, saveData]);
+  }, [aiProfile, savedPersonas, userProfile, gallery, journal, knowledgeBase, memories, apiKey, anthropicApiKey, elevenLabsApiKey, geminiApiKey, openrouterApiKey, wavespeedApiKey, fcmToken, autoSaveChat, autoJsonBackup, isLoaded, lastInteractionTime, userId, firebaseApiKey, firebaseAuthDomain, firebaseProjectId, firebaseStorageBucket, firebaseMessagingSenderId, firebaseAppId, saveData]);
 
   // ── Gallery save — completely separate from saveData to avoid hook ordering issues.
   // Only runs when galleryLoaded is true, so it never overwrites with an empty list.
@@ -1077,7 +1082,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           aiProfile, savedPersonas, userProfile,
           journal, knowledgeBase, memories,
           gallery,
-          apiKey, anthropicApiKey, elevenLabsApiKey, geminiApiKey,
+          apiKey, anthropicApiKey, elevenLabsApiKey, geminiApiKey, openrouterApiKey,
           wavespeedApiKey,
           autoSaveChat, autoBackupSchedule,
         }, firebaseRuntimeConfig);
@@ -1119,7 +1124,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           aiProfile, savedPersonas, userProfile,
           journal, knowledgeBase, memories,
           gallery,
-          apiKey, anthropicApiKey, elevenLabsApiKey, geminiApiKey,
+          apiKey, anthropicApiKey, elevenLabsApiKey, geminiApiKey, openrouterApiKey,
           wavespeedApiKey,
           autoSaveChat, autoBackupSchedule, realTimeSyncEnabled,
         }, firebaseRuntimeConfig);
@@ -1446,6 +1451,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setGeminiApiKeyState(key);
     loadFromDB('indigo_app_data_core').then((core: any) => {
       if (core) saveToDB('indigo_app_data_core', { ...core, geminiApiKey: key });
+    }).catch(() => {});
+  };
+
+  const setOpenrouterApiKey = (key: string | null) => {
+    setOpenrouterApiKeyState(key);
+    loadFromDB('indigo_app_data_core').then((core: any) => {
+      if (core) saveToDB('indigo_app_data_core', { ...core, openrouterApiKey: key });
     }).catch(() => {});
   };
 
@@ -2008,6 +2020,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       anthropicApiKey, setAnthropicApiKey,
       elevenLabsApiKey, setElevenLabsApiKey,
       geminiApiKey, setGeminiApiKey,
+      openrouterApiKey, setOpenrouterApiKey,
       wavespeedApiKey, setWavespeedApiKey,
       userLocation,
       userMotion,
