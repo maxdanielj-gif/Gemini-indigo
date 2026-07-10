@@ -40,7 +40,7 @@ const ToastContainer: React.FC = () => {
             <h3 className="text-sm font-semibold text-indigo-900 dark:text-indigo-100 truncate">
               {toast.title}
             </h3>
-            <p className="mt-1 text-sm text-indigo-600 dark:text-indigo-400 line-clamp-3">
+            <p className="mt-1 text-sm text-indigo-600 dark:text-indigo-400">
               {toast.message}
             </p>
           </div>
