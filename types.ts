@@ -4,7 +4,6 @@ export interface ChatSession {
   messages: ChatMessage[];
   createdAt: number;
   updatedAt: number;
-  personaId?: string;  // which persona this session belongs to
 }
 
 export interface AIProfile {
@@ -56,7 +55,7 @@ export interface AIProfile {
   dynamicEmotion?: boolean;  // Auto-detect emotion from AI reply and adjust voice
   knowsItsAI: boolean;
   model: string;
-  llmProvider?: 'claude' | 'gemini';
+  llmProvider?: 'claude' | 'gemini' | 'openrouter';
   temperature: number;
   maxTokens?: number;
   timeAwareness: boolean;
@@ -110,7 +109,6 @@ export interface ChatMessage {
 export interface KnowledgeBaseDocument {
   name: string;
   content: string;
-  personaId?: string;  // which persona this document belongs to (undefined = shared/legacy)
 }
 
 export interface Memory {
@@ -137,6 +135,13 @@ export interface GalleryItem {
   prompt?: string;
   timestamp: number;
   personaId?: string; // which persona this image belongs to (undefined = unassigned)
+  // Set when this item's data was too large to safely hold in memory all at
+  // once alongside the rest of the gallery (see loadGallery in AppContext).
+  // When true, `url` is intentionally left empty — the real data is still
+  // safely on disk, just not loaded — and approxSizeMB describes how big it
+  // was so the user can decide whether to delete it.
+  oversized?: boolean;
+  approxSizeMB?: number;
 }
 
 export interface ProactiveCommunication {
