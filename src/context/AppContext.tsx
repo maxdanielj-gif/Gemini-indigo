@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { gzipSync, strToU8, gunzipSync, strFromU8 } from 'fflate';
 import { saveToDB, loadFromDB, deleteFromDB, clearDB } from '../services/db';
 import { onForegroundMessage, requestNotificationPermission } from '../services/webPushService';
@@ -258,20 +258,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [gallery, setGallery] = useState<GalleryItem[]>([]);
   const [galleryLoaded, setGalleryLoaded] = useState(false);
+  // Raw JSON strings for items flagged `oversized` during load — kept OUTSIDE
+  // React state (a ref, not useState) specifically so this data never
+  // triggers re-renders or gets held alongside the rest of the gallery in a
+  // way that contributes to the exact memory problem we're avoiding. Used
+  // only to write the item back unchanged if the gallery re-saves.
+  const oversizedRawRef = useRef<Map<string, string>>(new Map());
+
+  // Items whose base64 data exceeds this are kept out of memory. This is
+  // deliberately generous — normal AI-generated images and reasonably-sized
+  // photos are nowhere near this — it's aimed at full-resolution phone
+  // camera photos (uncompressed uploads can easily be 5-15MB+ each), which
+  // is exactly the kind of thing that can crash a phone browser once you
+  // have a few dozen of them all loaded into memory simultaneously.
+  const OVERSIZED_ITEM_THRESHOLD_CHARS = 8 * 1024 * 1024; // ~8MB of base64 text
 
   const loadGallery = async () => {
     if (galleryLoaded) return;
     console.log("Loading gallery items lazily...", Date.now());
-    let galleryData = [];
+    let galleryData: GalleryItem[] = [];
     const galleryIds = await loadFromDB('indigo_app_data_gallery_ids');
     if (galleryIds && Array.isArray(galleryIds)) {
-        galleryData = await Promise.all(
-            galleryIds.map(async (id: string) => {
-                const itemStr = await loadFromDB(`indigo_app_data_gallery_item_${id}`);
-                return itemStr ? (typeof itemStr === 'string' ? JSON.parse(itemStr) : itemStr) : null;
-            })
-        );
-        galleryData = galleryData.filter(item => item !== null);
+        oversizedRawRef.current.clear();
+        // Sequential, not Promise.all — loading dozens of large base64
+        // strings in parallel spikes peak memory far higher than loading
+        // them one at a time. This alone won't fix a gallery whose *total*
+        // size is too much to hold, but it meaningfully lowers the odds of
+        // crashing during the load itself, and the size cap below handles
+        // the rest.
+        for (const id of galleryIds) {
+            const itemStr = await loadFromDB(`indigo_app_data_gallery_item_${id}`);
+            if (!itemStr) continue;
+            const rawStr = typeof itemStr === 'string' ? itemStr : JSON.stringify(itemStr);
+            if (rawStr.length > OVERSIZED_ITEM_THRESHOLD_CHARS) {
+                try {
+                    const parsed = typeof itemStr === 'string' ? JSON.parse(itemStr) : itemStr;
+                    oversizedRawRef.current.set(id, rawStr);
+                    galleryData.push({
+                        ...parsed,
+                        url: '', // deliberately not held in memory
+                        oversized: true,
+                        approxSizeMB: Math.round((rawStr.length / 1024 / 1024) * 10) / 10,
+                    });
+                } catch {
+                    // Even the metadata failed to parse — skip this item entirely
+                    // rather than let a corrupted entry take down the whole load.
+                    console.error(`Gallery item ${id} could not be parsed and was skipped.`);
+                }
+                continue;
+            }
+            try {
+                const parsed = typeof itemStr === 'string' ? JSON.parse(itemStr) : itemStr;
+                galleryData.push(parsed);
+            } catch {
+                console.error(`Gallery item ${id} could not be parsed and was skipped.`);
+            }
+        }
     }
     setGallery(galleryData);
     setGalleryLoaded(true);
@@ -999,6 +1041,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const galleryIds = gallery.map(item => item.id);
         await saveToDB('indigo_app_data_gallery_ids', galleryIds);
         for (const item of gallery) {
+          if (item.oversized) {
+            // Never write the in-memory placeholder (empty url) over the
+            // real data on disk. If we have the original raw bytes from
+            // this session, rewrite them unchanged; if not (e.g. the app
+            // was reloaded since the item was flagged), leave the stored
+            // item alone entirely rather than risk erasing it.
+            const rawOriginal = oversizedRawRef.current.get(item.id);
+            if (rawOriginal) {
+              await saveToDB(`indigo_app_data_gallery_item_${item.id}`, rawOriginal);
+            }
+            continue;
+          }
           await saveToDB(`indigo_app_data_gallery_item_${item.id}`, JSON.stringify(item));
         }
         // Clean up items that were deleted
@@ -1316,11 +1370,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deleteImageFromGallery = (id: string) => {
     setGallery(prev => prev.filter(item => item.id !== id));
+    oversizedRawRef.current.delete(id);
     saveData();
   };
 
   const deleteImagesFromGallery = (ids: string[]) => {
     setGallery(prev => prev.filter(item => !ids.includes(item.id)));
+    ids.forEach(id => oversizedRawRef.current.delete(id));
     saveData();
   };
 
