@@ -258,12 +258,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [gallery, setGallery] = useState<GalleryItem[]>([]);
   const [galleryLoaded, setGalleryLoaded] = useState(false);
-  // Raw JSON strings for items flagged `oversized` during load — kept OUTSIDE
-  // React state (a ref, not useState) specifically so this data never
-  // triggers re-renders or gets held alongside the rest of the gallery in a
-  // way that contributes to the exact memory problem we're avoiding. Used
-  // only to write the item back unchanged if the gallery re-saves.
-  const oversizedRawRef = useRef<Map<string, string>>(new Map());
 
   // Items whose base64 data exceeds this are kept out of memory. This is
   // deliberately generous — normal AI-generated images and reasonably-sized
@@ -279,37 +273,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let galleryData: GalleryItem[] = [];
     const galleryIds = await loadFromDB('indigo_app_data_gallery_ids');
     if (galleryIds && Array.isArray(galleryIds)) {
-        oversizedRawRef.current.clear();
         // Sequential, not Promise.all — loading dozens of large base64
         // strings in parallel spikes peak memory far higher than loading
-        // them one at a time. This alone won't fix a gallery whose *total*
-        // size is too much to hold, but it meaningfully lowers the odds of
-        // crashing during the load itself, and the size cap below handles
-        // the rest.
+        // them one at a time. Oversized items are represented by a tiny
+        // metadata-only placeholder; their full data stays on disk and is
+        // never held in memory at all.
         for (const id of galleryIds) {
-            const itemStr = await loadFromDB(`indigo_app_data_gallery_item_${id}`);
+            let itemStr = await loadFromDB(`indigo_app_data_gallery_item_${id}`);
             if (!itemStr) continue;
-            const rawStr = typeof itemStr === 'string' ? itemStr : JSON.stringify(itemStr);
-            if (rawStr.length > OVERSIZED_ITEM_THRESHOLD_CHARS) {
-                try {
-                    const parsed = typeof itemStr === 'string' ? JSON.parse(itemStr) : itemStr;
-                    oversizedRawRef.current.set(id, rawStr);
-                    galleryData.push({
-                        ...parsed,
-                        url: '', // deliberately not held in memory
-                        oversized: true,
-                        approxSizeMB: Math.round((rawStr.length / 1024 / 1024) * 10) / 10,
-                    });
-                } catch {
-                    // Even the metadata failed to parse — skip this item entirely
-                    // rather than let a corrupted entry take down the whole load.
-                    console.error(`Gallery item ${id} could not be parsed and was skipped.`);
-                }
-                continue;
-            }
+            const isString = typeof itemStr === 'string';
+            const approxLen = isString ? itemStr.length : JSON.stringify(itemStr).length;
             try {
-                const parsed = typeof itemStr === 'string' ? JSON.parse(itemStr) : itemStr;
-                galleryData.push(parsed);
+                const parsed = isString ? JSON.parse(itemStr) : itemStr;
+                itemStr = null; // release the raw string before deciding what to keep
+                if (approxLen > OVERSIZED_ITEM_THRESHOLD_CHARS) {
+                    // Keep only tiny metadata fields — deliberately NOT
+                    // spreading `parsed`, so the huge `url` string can be
+                    // garbage-collected immediately.
+                    galleryData.push({
+                        id: parsed.id ?? id,
+                        type: parsed.type ?? 'uploaded',
+                        mediaType: parsed.mediaType,
+                        url: '', // deliberately not held in memory
+                        prompt: parsed.prompt,
+                        timestamp: parsed.timestamp ?? 0,
+                        personaId: parsed.personaId,
+                        oversized: true,
+                        approxSizeMB: Math.round((approxLen / 1024 / 1024) * 10) / 10,
+                    });
+                } else {
+                    galleryData.push(parsed);
+                }
             } catch {
                 console.error(`Gallery item ${id} could not be parsed and was skipped.`);
             }
@@ -1042,15 +1036,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         await saveToDB('indigo_app_data_gallery_ids', galleryIds);
         for (const item of gallery) {
           if (item.oversized) {
-            // Never write the in-memory placeholder (empty url) over the
-            // real data on disk. If we have the original raw bytes from
-            // this session, rewrite them unchanged; if not (e.g. the app
-            // was reloaded since the item was flagged), leave the stored
-            // item alone entirely rather than risk erasing it.
-            const rawOriginal = oversizedRawRef.current.get(item.id);
-            if (rawOriginal) {
-              await saveToDB(`indigo_app_data_gallery_item_${item.id}`, rawOriginal);
-            }
+            // The full data for this item is already on disk and was never
+            // loaded into memory. Writing the in-memory placeholder (which
+            // has an intentionally empty url) would destroy it — so leave
+            // the stored copy completely untouched. Its id remains in
+            // galleryIds, which protects it from the cleanup pass below.
             continue;
           }
           await saveToDB(`indigo_app_data_gallery_item_${item.id}`, JSON.stringify(item));
@@ -1370,13 +1360,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deleteImageFromGallery = (id: string) => {
     setGallery(prev => prev.filter(item => item.id !== id));
-    oversizedRawRef.current.delete(id);
     saveData();
   };
 
   const deleteImagesFromGallery = (ids: string[]) => {
     setGallery(prev => prev.filter(item => !ids.includes(item.id)));
-    ids.forEach(id => oversizedRawRef.current.delete(id));
     saveData();
   };
 
