@@ -135,6 +135,13 @@ export interface GalleryItem {
   prompt?: string;
   timestamp: number;
   personaId?: string; // which persona this image belongs to (undefined = unassigned)
+  // Set when this item's data was too large to safely hold in memory all at
+  // once alongside the rest of the gallery (see loadGallery in AppContext).
+  // When true, `url` is intentionally left empty — the real data is still
+  // safely on disk, just not loaded — and approxSizeMB describes how big it
+  // was so the user can decide whether to delete it.
+  oversized?: boolean;
+  approxSizeMB?: number;
 }
 
 export interface ProactiveCommunication {
