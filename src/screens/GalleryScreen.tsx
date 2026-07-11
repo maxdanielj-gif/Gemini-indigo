@@ -5,6 +5,7 @@ import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import ImageModal from '../components/ImageModal';
 import { downloadFile } from '../utils/downloadFile';
+import { compressImageToDataUrl } from '../utils/compressImage';
 
 // ── Persona reassignment popover ──────────────────────────────────────────────
 const PersonaPopover: React.FC<{
@@ -56,9 +57,20 @@ const GalleryItemCard: React.FC<{
         <div className={`bg-gray-100 dark:bg-indigo-800 rounded-lg shadow-sm hover:shadow-md transition-all flex flex-col group relative border-2 ${selectedIds.includes(item.id) ? 'border-indigo-500 ring-2 ring-indigo-200' : 'border-transparent'}`}>
             <div
                 className="aspect-square overflow-hidden rounded-t-lg cursor-pointer relative"
-                onClick={() => isSelectionMode ? toggleSelectImage(item.id) : setSelectedItem({ url: item.url, mediaType: mediaType as 'image' | 'video', prompt: item.prompt })}
+                onClick={() => {
+                    if (item.oversized) return; // nothing to preview — use Delete below
+                    isSelectionMode ? toggleSelectImage(item.id) : setSelectedItem({ url: item.url, mediaType: mediaType as 'image' | 'video', prompt: item.prompt });
+                }}
             >
-                {mediaType === 'video' ? (
+                {item.oversized ? (
+                    <div className="w-full h-full flex flex-col items-center justify-center bg-amber-50 dark:bg-amber-950/40 p-3 text-center cursor-default">
+                        <svg className="w-8 h-8 text-amber-500 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                        <p className="text-xs font-medium text-amber-700 dark:text-amber-400">Too large to preview</p>
+                        <p className="text-[11px] text-amber-600/80 dark:text-amber-500/70 mt-0.5">~{item.approxSizeMB} MB</p>
+                    </div>
+                ) : mediaType === 'video' ? (
                     // preload="metadata" only fetches enough to know duration/
                     // dimensions — it does NOT decode the full video the way an
                     // <img> tag forces a full (and doomed) decode attempt when
@@ -76,7 +88,7 @@ const GalleryItemCard: React.FC<{
                     <img src={item.url} alt="Gallery Item" className="w-full h-full object-cover" loading="lazy" />
                 )}
 
-                {mediaType === 'video' && !isSelectionMode && (
+                {mediaType === 'video' && !isSelectionMode && !item.oversized && (
                     <div className="absolute inset-0 flex items-center justify-center bg-black/10 pointer-events-none">
                         <div className="w-10 h-10 rounded-full bg-black/50 flex items-center justify-center">
                             <div className="w-0 h-0 border-y-[7px] border-y-transparent border-l-[11px] border-l-white ml-1" />
@@ -100,13 +112,15 @@ const GalleryItemCard: React.FC<{
             </div>
 
             <div className="flex items-center justify-center gap-1 px-2 py-2 bg-gray-50 dark:bg-indigo-950 border-t border-gray-200 dark:border-indigo-700">
-                <button
-                    onClick={() => downloadFile(item.url, `${activeTab}-${item.id}.png`)}
-                    className="p-2 text-gray-500 dark:text-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-200 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
-                    title="Download"
-                >
-                    <Download className="w-5 h-5" />
-                </button>
+                {!item.oversized && (
+                    <button
+                        onClick={() => downloadFile(item.url, `${activeTab}-${item.id}.png`)}
+                        className="p-2 text-gray-500 dark:text-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-200 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
+                        title="Download"
+                    >
+                        <Download className="w-5 h-5" />
+                    </button>
+                )}
                 <button
                     onClick={() => handleDelete(item.id)}
                     className="p-2 text-red-400 hover:text-red-600 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
@@ -256,11 +270,22 @@ const GalleryScreen: React.FC = () => {
               for (const name of mediaFiles) {
                 const isVideo = videoExts.some(ext => name.toLowerCase().endsWith(ext));
                 const blob = await zip.files[name].async('blob');
-                const base64 = await new Promise<string>((resolve) => {
-                  const reader = new FileReader();
-                  reader.onload = () => resolve(reader.result as string);
-                  reader.readAsDataURL(blob);
-                });
+                const base64 = isVideo
+                  ? await new Promise<string>((resolve) => {
+                      const reader = new FileReader();
+                      reader.onload = () => resolve(reader.result as string);
+                      reader.readAsDataURL(blob);
+                    })
+                  : await compressImageToDataUrl(blob).catch(async () => {
+                      // If compression fails for any reason (unsupported format,
+                      // etc.), fall back to storing the original rather than
+                      // losing the upload entirely.
+                      return await new Promise<string>((resolve) => {
+                        const reader = new FileReader();
+                        reader.onload = () => resolve(reader.result as string);
+                        reader.readAsDataURL(blob);
+                      });
+                    });
                 addToGallery({ id: `upload-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, type: 'uploaded', mediaType: isVideo ? 'video' : 'image', url: base64, timestamp: Date.now(), personaId: tagPersonaId });
               }
               addToast({ title: 'ZIP Upload', message: `Successfully uploaded ${mediaFiles.length} items.`, type: 'success' });
@@ -270,13 +295,30 @@ const GalleryScreen: React.FC = () => {
           }
         } else {
           const isVideo = file.type.startsWith('video/');
-          const reader = new FileReader();
-          reader.onload = (event) => {
-            if (event.target?.result) {
-              addToGallery({ id: Date.now().toString() + Math.random().toString(36).substr(2, 9), type: 'uploaded', mediaType: isVideo ? 'video' : 'image', url: event.target.result as string, timestamp: Date.now(), personaId: tagPersonaId });
+          if (isVideo) {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+              if (event.target?.result) {
+                addToGallery({ id: Date.now().toString() + Math.random().toString(36).substr(2, 9), type: 'uploaded', mediaType: 'video', url: event.target.result as string, timestamp: Date.now(), personaId: tagPersonaId });
+              }
+            };
+            reader.readAsDataURL(file);
+          } else {
+            try {
+              const base64 = await compressImageToDataUrl(file);
+              addToGallery({ id: Date.now().toString() + Math.random().toString(36).substr(2, 9), type: 'uploaded', mediaType: 'image', url: base64, timestamp: Date.now(), personaId: tagPersonaId });
+            } catch {
+              // Fall back to the original file if compression fails for any
+              // reason, rather than silently dropping the upload.
+              const reader = new FileReader();
+              reader.onload = (event) => {
+                if (event.target?.result) {
+                  addToGallery({ id: Date.now().toString() + Math.random().toString(36).substr(2, 9), type: 'uploaded', mediaType: 'image', url: event.target.result as string, timestamp: Date.now(), personaId: tagPersonaId });
+                }
+              };
+              reader.readAsDataURL(file);
             }
-          };
-          reader.readAsDataURL(file);
+          }
         }
       }
       setActiveTab('uploaded');
