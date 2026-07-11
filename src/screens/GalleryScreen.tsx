@@ -56,9 +56,33 @@ const GalleryItemCard: React.FC<{
         <div className={`bg-gray-100 dark:bg-indigo-800 rounded-lg shadow-sm hover:shadow-md transition-all flex flex-col group relative border-2 ${selectedIds.includes(item.id) ? 'border-indigo-500 ring-2 ring-indigo-200' : 'border-transparent'}`}>
             <div
                 className="aspect-square overflow-hidden rounded-t-lg cursor-pointer relative"
-                onClick={() => isSelectionMode ? toggleSelectImage(item.id) : setSelectedItem({ url: item.url, prompt: item.prompt })}
+                onClick={() => isSelectionMode ? toggleSelectImage(item.id) : setSelectedItem({ url: item.url, mediaType: mediaType as 'image' | 'video', prompt: item.prompt })}
             >
-                <img src={item.url} alt="Gallery Item" className="w-full h-full object-cover" loading="lazy" />
+                {mediaType === 'video' ? (
+                    // preload="metadata" only fetches enough to know duration/
+                    // dimensions — it does NOT decode the full video the way an
+                    // <img> tag forces a full (and doomed) decode attempt when
+                    // handed video data. This matters a lot on a phone: a grid
+                    // full of <img> tags pointed at multi-MB base64 video data
+                    // is a realistic way to exhaust the tab's memory and crash.
+                    <video
+                        src={item.url}
+                        preload="metadata"
+                        muted
+                        playsInline
+                        className="w-full h-full object-cover pointer-events-none"
+                    />
+                ) : (
+                    <img src={item.url} alt="Gallery Item" className="w-full h-full object-cover" loading="lazy" />
+                )}
+
+                {mediaType === 'video' && !isSelectionMode && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/10 pointer-events-none">
+                        <div className="w-10 h-10 rounded-full bg-black/50 flex items-center justify-center">
+                            <div className="w-0 h-0 border-y-[7px] border-y-transparent border-l-[11px] border-l-white ml-1" />
+                        </div>
+                    </div>
+                )}
 
                 {isSelectionMode ? (
                     <div className="absolute top-2 right-2 p-1 bg-white dark:bg-indigo-900 rounded-full shadow-md">
