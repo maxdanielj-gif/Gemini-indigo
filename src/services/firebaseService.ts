@@ -309,7 +309,15 @@ export async function uploadGalleryToFirebaseStorage(
       const mimeType = blob.type || 'image/png';
       ext = mimeType.split('/')[1]?.replace('+xml', '') || 'png';
       const arrayBuf = await blob.arrayBuffer();
-      base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuf)));
+      // Convert in chunks — spreading a multi-MB Uint8Array into
+      // String.fromCharCode(...) blows the call stack and crashes the tab.
+      const bytes = new Uint8Array(arrayBuf);
+      let binary = '';
+      const CHUNK = 0x8000;
+      for (let j = 0; j < bytes.length; j += CHUNK) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(j, j + CHUNK) as unknown as number[]);
+      }
+      base64 = btoa(binary);
     } else {
       const mimeMatch = item.url.match(/data:image\/([^;]+);/);
       ext = mimeMatch ? mimeMatch[1].replace('+xml', '') : 'png';
@@ -454,6 +462,106 @@ export async function uploadKnowledgeBaseToFirebaseStorage(
   });
 
   return uploaded;
+}
+
+// ── Upload profile images (user photo + persona photos) to Firebase Storage ──
+// The Firestore backup document cannot hold these (1 MiB doc limit — the
+// backup deliberately nulls every referenceImage), so they get the same
+// treatment as the gallery: individual files in Storage + a manifest doc.
+export interface ProfileImageEntry { key: string; dataUrl: string; }
+
+export async function uploadProfileImagesToFirebaseStorage(
+  userId: string,
+  entries: ProfileImageEntry[],
+  runtime?: FirebaseRuntimeConfig,
+  onProgress?: (done: number, total: number) => void,
+): Promise<number> {
+  if (!userId?.trim()) throw new Error("A User ID is required. Set one in Settings → Cloud Sync.");
+
+  const valid = entries.filter(e => e.key && typeof e.dataUrl === 'string' && e.dataUrl.startsWith('data:'));
+  if (valid.length === 0) return 0;
+
+  const app = getApp(runtime);
+  if (!currentStorage) currentStorage = getStorage(app);
+  const storage = currentStorage;
+  const db = getDb(runtime);
+
+  let uploaded = 0;
+  const manifest: Array<{ key: string; path: string }> = [];
+
+  for (const entry of valid) {
+    const mimeMatch = entry.dataUrl.match(/data:image\/([^;]+);/);
+    const ext = mimeMatch ? mimeMatch[1].replace('+xml', '') : 'png';
+    const base64 = entry.dataUrl.includes(',') ? entry.dataUrl.split(',')[1] : entry.dataUrl;
+    const safeKey = entry.key.replace(/[^a-zA-Z0-9._\-]/g, '_');
+    const path = `${userId.trim()}/profile-images/${safeKey}.${ext}`;
+    const fileRef = storageRef(storage, path);
+
+    await withTimeout(
+      uploadString(fileRef, base64, 'base64', { contentType: `image/${ext}` }),
+      60_000,
+      `uploading profile image "${entry.key}"`,
+    );
+    manifest.push({ key: entry.key, path });
+    uploaded++;
+    if (onProgress) onProgress(uploaded, valid.length);
+  }
+
+  // Wholesale replace — profile photos are a small set that mirrors the current
+  // personas, so photos of deleted personas naturally drop out of the manifest.
+  await setDoc(doc(db, 'indigo_profile_image_manifests', userId.trim()), {
+    updatedAt: serverTimestamp(),
+    count:     uploaded,
+    entries:   manifest,
+    version:   1,
+  });
+
+  return uploaded;
+}
+
+// ── Restore profile images from Firebase Storage ──────────────────────────────
+// Returns a map of key → data URL. An empty map (older backups made before
+// profile photos were backed up) is normal, not an error, and each image is
+// fetched best-effort so one missing file never sinks the whole restore.
+export async function restoreProfileImagesFromFirebaseStorage(
+  userId: string,
+  runtime?: FirebaseRuntimeConfig,
+  onProgress?: (done: number, total: number) => void,
+): Promise<Record<string, string>> {
+  if (!userId?.trim()) throw new Error("A User ID is required. Set one in Settings → Cloud Sync.");
+
+  const db   = getDb(runtime);
+  const snap = await getDoc(doc(db, 'indigo_profile_image_manifests', userId.trim()));
+  if (!snap.exists()) return {};
+
+  const entries = (snap.data().entries as Array<{ key: string; path: string }>) || [];
+  if (entries.length === 0) return {};
+
+  const app = getApp(runtime);
+  if (!currentStorage) currentStorage = getStorage(app);
+  const storage = currentStorage;
+
+  const images: Record<string, string> = {};
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    try {
+      const fileRef = storageRef(storage, entry.path);
+      const downloadUrl = await getDownloadURL(fileRef);
+      const response = await fetch(downloadUrl);
+      if (!response.ok) continue;
+      const blob = await response.blob();
+      images[entry.key] = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload  = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error('Failed to read image data'));
+        reader.readAsDataURL(blob);
+      });
+    } catch (e) {
+      console.warn(`Profile image "${entry.key}" could not be restored:`, e);
+    }
+    if (onProgress) onProgress(i + 1, entries.length);
+  }
+  return images;
 }
 
 // ── Restore knowledge base files from Firebase Storage ────────────────────────
