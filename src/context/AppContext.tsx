@@ -3,7 +3,7 @@ import { gzipSync, strToU8, gunzipSync, strFromU8 } from 'fflate';
 import { saveToDB, loadFromDB, deleteFromDB, clearDB } from '../services/db';
 import { onForegroundMessage, requestNotificationPermission } from '../services/webPushService';
 import { showNativeNotification } from '../services/notificationService';
-import { backupToFirestore, restoreFromFirestore, uploadGalleryToFirebaseStorage, restoreGalleryFromFirebaseStorage, uploadKnowledgeBaseToFirebaseStorage, restoreKnowledgeBaseFromFirebaseStorage, uploadProfileImagesToFirebaseStorage, restoreProfileImagesFromFirebaseStorage, ProfileImageEntry, signInWithGoogle as fbSignInWithGoogle, signOutUser as fbSignOutUser, onAuthStateChange, FirebaseUser } from '../services/firebaseService';
+import { backupToFirestore, restoreFromFirestore, uploadGalleryToFirebaseStorage, restoreGalleryFromFirebaseStorage, uploadKnowledgeBaseToFirebaseStorage, restoreKnowledgeBaseFromFirebaseStorage, signInWithGoogle as fbSignInWithGoogle, signOutUser as fbSignOutUser, onAuthStateChange, FirebaseUser } from '../services/firebaseService';
 import { AIProfile, UserProfile, ChatMessage, GalleryItem, JournalEntry, Memory, KnowledgeBaseDocument, ChatSession, ProactiveCommunication } from '../types';
 import { memoryService } from '../services/MemoryService';
 
@@ -178,6 +178,7 @@ interface AppContextType extends AppState {
   reloadGallery: () => Promise<void>;
   getGalleryItemUrl: (id: string) => Promise<string | null>;
   galleryLoading: boolean;
+  resolveProfileImagesFromGallery: () => Promise<void>;
   currentUser: FirebaseUser | null;
   authLoading: boolean;
   signInWithGoogle: () => Promise<void>;
@@ -185,24 +186,6 @@ interface AppContextType extends AppState {
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
-
-// Gathers every profile photo (user + active persona + saved personas) as
-// key → data-URL entries for the Firebase Storage backup. The Firestore
-// document deliberately nulls these (1 MiB doc limit), so without this
-// companion upload profile photos were never backed up anywhere.
-const collectProfileImageEntries = (data: any): ProfileImageEntry[] => {
-  const byKey = new Map<string, string>();
-  const push = (key: string, img: any) => {
-    if (typeof img === 'string' && img.startsWith('data:')) byKey.set(key, img);
-  };
-  push('user_reference', data?.userProfile?.referenceImage);
-  if (data?.aiProfile?.id) push(`persona_${data.aiProfile.id}_reference`, data.aiProfile.referenceImage);
-  const personas = Array.isArray(data?.savedPersonas) ? data.savedPersonas : [];
-  for (const p of personas) {
-    if (p?.id) push(`persona_${p.id}_reference`, p.referenceImage);
-  }
-  return Array.from(byKey, ([key, dataUrl]) => ({ key, dataUrl }));
-};
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Initial States
@@ -516,7 +499,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // ready before they ever tap Gallery, so there's nothing left to wait for.
   useEffect(() => {
     if (!isSuccessfullyLoaded || galleryLoadedRef.current) return;
-    loadGallery();
+    loadGallery().then(() => { resolveProfileImagesFromGallery(); });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSuccessfullyLoaded]);
   const [isPersonaSwitching, setIsPersonaSwitching] = useState(false);
@@ -1301,15 +1284,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           wavespeedApiKey,
           autoSaveChat, autoBackupSchedule,
         }, firebaseRuntimeConfig);
-        // Include profile photos (best-effort — never fail the whole auto-backup)
-        try {
-          const profileImages = collectProfileImageEntries({ aiProfile, savedPersonas, userProfile });
-          if (profileImages.length > 0 && firebaseStorageBucket) {
-            await uploadProfileImagesToFirebaseStorage(userId, profileImages, firebaseRuntimeConfig);
-          }
-        } catch (imgErr) {
-          console.error('Auto-backup: profile photo upload failed:', imgErr);
-        }
+        // Profile photos are not part of this backup — they ride with the
+        // gallery via referenceImageGalleryId (see syncReferenceImageGalleryLink
+        // and resolveProfileImagesFromGallery). Nothing else to upload here.
         const ts = Date.now();
         lastAutoBackupRef.current = ts;
         setLastFirebaseBackupTimeState(ts);
@@ -1409,6 +1386,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
   
   const savePersona = (profile: AIProfile, chatHistory: ChatMessage[], sessions: ChatSession[], activeSessionId: string | null) => {
+    // Keep the photo's mirrored Gallery item in step with this save (see
+    // syncReferenceImageGalleryLink above) before the profile is committed.
+    const existingForId = savedPersonas.find(p => p.id === profile.id) || (aiProfile.id === profile.id ? aiProfile : undefined);
+    const linkedId = syncReferenceImageGalleryLink(
+      profile.name || 'Persona',
+      profile.id,
+      existingForId?.referenceImage,
+      (existingForId as any)?.referenceImageGalleryId,
+      profile.referenceImage,
+    );
+    profile = { ...profile, referenceImageGalleryId: linkedId };
+
     setSavedPersonas(prev => {
         const existingIndex = prev.findIndex(p => p.id === profile.id);
         if (existingIndex >= 0) {
@@ -1520,7 +1509,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const setUserProfile = (profile: UserProfile) => setUserProfileState(profile);
 
   const setUserReferenceImage = (image: string | null) => {
-    setUserProfileState(prev => ({ ...prev, referenceImage: image }));
+    // Computed outside the updater below — React may invoke a functional
+    // setState updater more than once (e.g. in StrictMode), and the gallery
+    // mutators this calls (addToGallery/updateGalleryItem/deleteImageFromGallery)
+    // are side effects that must only run once per actual change.
+    const linkedId = syncReferenceImageGalleryLink('User', undefined, userProfile.referenceImage, (userProfile as any).referenceImageGalleryId, image);
+    setUserProfileState(prev => ({ ...prev, referenceImage: image, referenceImageGalleryId: linkedId } as any));
     saveData();
   };
   
@@ -1584,6 +1578,88 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     saveData();
   };
+
+  // ── Profile photo ↔ Gallery link ─────────────────────────────────────────────
+  // Firestore can't hold profile photos directly (base64 images blow well past
+  // its per-document size/quota limits). Instead, every profile photo (user +
+  // each persona) is mirrored into the Gallery as a small "uploaded" item, and
+  // the profile only carries that item's id (referenceImageGalleryId) — a tiny
+  // string that backs up in Firestore without issue. The actual image data
+  // rides along with the existing Gallery → Google Drive backup instead, which
+  // has no such size limit.
+  //
+  // Called whenever a profile is saved with a photo that's new or changed:
+  // reuses the existing linked Gallery item if there is one (so re-saving a
+  // profile doesn't pile up duplicate gallery entries), creates one if this is
+  // the first photo, or removes the link if the photo was cleared.
+  const syncReferenceImageGalleryLink = (
+    label: string,
+    personaId: string | undefined,
+    oldImage: string | null | undefined,
+    oldGalleryId: string | null | undefined,
+    newImage: string | null | undefined,
+  ): string | null => {
+    const oldVal = oldImage || null;
+    const newVal = newImage || null;
+    if (oldVal === newVal) return oldGalleryId || null;
+
+    if (!newVal) {
+      // Photo was removed — drop the mirrored gallery item too.
+      if (oldGalleryId) deleteImageFromGallery(oldGalleryId);
+      return null;
+    }
+
+    if (oldGalleryId) {
+      // Photo changed — update the existing mirrored item in place rather
+      // than creating a new one each time a profile photo is edited.
+      updateGalleryItem(oldGalleryId, { url: newVal, timestamp: Date.now() } as any);
+      return oldGalleryId;
+    }
+
+    const newId = `profile-${personaId || 'user'}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    addToGallery({
+      id: newId,
+      type: 'uploaded',
+      mediaType: 'image',
+      url: newVal,
+      prompt: `${label} profile photo`,
+      timestamp: Date.now(),
+      personaId,
+    } as any);
+    return newId;
+  };
+
+  // After a restore, Firestore's copy of each profile has referenceImage
+  // stripped (too large for a Firestore doc) but keeps referenceImageGalleryId
+  // — the id of the mirrored copy in the Gallery. Once the gallery itself has
+  // been restored (from its own Drive backup) or already has that item
+  // locally, this fills referenceImage back in from it. Safe to call anytime;
+  // it only touches profiles that have a link but no photo yet.
+  const resolveProfileImagesFromGallery = React.useCallback(async () => {
+    if (aiProfile.referenceImageGalleryId && !aiProfile.referenceImage) {
+      const url = await getGalleryItemUrl(aiProfile.referenceImageGalleryId);
+      if (url) setAIProfileState(prev => (prev.id === aiProfile.id ? { ...prev, referenceImage: url } : prev));
+    }
+
+    const personasNeedingResolve = savedPersonas.filter(p => (p as any).referenceImageGalleryId && !p.referenceImage);
+    if (personasNeedingResolve.length > 0) {
+      const resolved = new Map<string, string>();
+      for (const p of personasNeedingResolve) {
+        const url = await getGalleryItemUrl((p as any).referenceImageGalleryId);
+        if (url) resolved.set(p.id, url);
+      }
+      if (resolved.size > 0) {
+        setSavedPersonas(prev => prev.map(p => (resolved.has(p.id) ? { ...p, referenceImage: resolved.get(p.id)! } : p)));
+      }
+    }
+
+    const userGalleryId = (userProfile as any).referenceImageGalleryId;
+    if (userGalleryId && !userProfile.referenceImage) {
+      const url = await getGalleryItemUrl(userGalleryId);
+      if (url) setUserProfileState(prev => ({ ...prev, referenceImage: url }));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiProfile, savedPersonas, userProfile, getGalleryItemUrl]);
 
   const addJournalEntry = (entry: JournalEntry) => {
     setJournal(prev => [entry, ...prev]);
@@ -1739,40 +1815,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const firebaseBackup = async (dataToBackup: any) => {
     if (!userId) throw new Error("Set a User ID in Cloud Sync settings before backing up.");
     await backupToFirestore(userId, dataToBackup, firebaseRuntimeConfig);
-    // Profile photos ride alongside the Firestore doc as Storage files.
-    const profileImages = collectProfileImageEntries(dataToBackup);
-    if (profileImages.length > 0 && firebaseStorageBucket) {
-      try {
-        await uploadProfileImagesToFirebaseStorage(userId, profileImages, firebaseRuntimeConfig);
-      } catch (e: any) {
-        throw new Error(`App data was backed up, but profile photos could not be uploaded: ${e.message || e}`);
-      }
-    }
+    // Profile photos are NOT uploaded to Firebase Storage here — Storage
+    // requires the paid Blaze plan and was throwing quota/permission errors
+    // on accounts without it. Instead, each profile photo is mirrored into
+    // the Gallery (see syncReferenceImageGalleryLink, called whenever a photo
+    // is set) and only its small referenceImageGalleryId travels in this
+    // Firestore document. The actual image rides along with the normal
+    // gallery backup (Settings → Cloud Sync → Gallery Images), which already
+    // handles arbitrarily large data without hitting Firestore's document
+    // size limit or needing Storage at all.
   };
 
   const firebaseRestore = async (): Promise<any | null> => {
     if (!userId) throw new Error("Set a User ID in Cloud Sync settings before restoring.");
     const data = await restoreFromFirestore(userId, firebaseRuntimeConfig);
     if (!data) return data;
-    // Reattach profile photos from Firebase Storage before the data is applied.
-    // Best-effort: backups made before profile photos were backed up have no
-    // manifest, and that must never block the rest of the restore.
-    try {
-      const images = await restoreProfileImagesFromFirebaseStorage(userId, firebaseRuntimeConfig);
-      if (Object.keys(images).length > 0) {
-        const withPhoto = (profile: any) => {
-          const url = profile?.id ? images[`persona_${profile.id}_reference`] : undefined;
-          return url ? { ...profile, referenceImage: url } : profile;
-        };
-        if (images['user_reference'] && data.userProfile) {
-          data.userProfile = { ...data.userProfile, referenceImage: images['user_reference'] };
-        }
-        if (data.aiProfile) data.aiProfile = withPhoto(data.aiProfile);
-        if (Array.isArray(data.savedPersonas)) data.savedPersonas = data.savedPersonas.map(withPhoto);
-      }
-    } catch (e) {
-      console.warn('Profile photo restore skipped:', e);
-    }
+    // Profile photos are resolved separately, from the Gallery, via
+    // resolveProfileImagesFromGallery() — called after this restore applies
+    // and again after any gallery restore completes (see SettingsScreen).
+    // This intentionally does NOT touch Firebase Storage.
     return data;
   };
 
@@ -2310,7 +2371,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   return (
     <AppContext.Provider value={{
       aiProfile, setAIProfile, savePersona, deletePersona, loadPersona,
-      savedPersonas, galleryLoaded, loadGallery, reloadGallery, getGalleryItemUrl, galleryLoading,
+      savedPersonas, galleryLoaded, loadGallery, reloadGallery, getGalleryItemUrl, galleryLoading, resolveProfileImagesFromGallery,
       userProfile, setUserProfile, setUserReferenceImage,
       gallery, addToGallery, addMultipleToGallery, deleteImageFromGallery, deleteImagesFromGallery, updateGalleryItem,
       journal, addJournalEntry, updateJournalEntry, deleteJournalEntry,
