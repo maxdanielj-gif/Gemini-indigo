@@ -252,8 +252,12 @@ const GalleryScreen: React.FC = () => {
 
   if (!galleryLoaded) {
     return (
-      <div className="flex h-screen items-center justify-center bg-gray-50 dark:bg-indigo-950">
+      <div className="flex h-screen flex-col items-center justify-center gap-3 bg-gray-50 dark:bg-indigo-950 px-6 text-center">
         <Loader2 className="w-12 h-12 text-indigo-600 animate-spin" />
+        <p className="text-sm font-medium text-indigo-600 dark:text-indigo-300">Getting your gallery ready…</p>
+        <p className="text-xs text-indigo-400 dark:text-indigo-500 max-w-xs">
+          This only takes a moment. It runs in the background, so you can head back here shortly.
+        </p>
       </div>
     );
   }
