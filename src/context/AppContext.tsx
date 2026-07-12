@@ -352,7 +352,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         try { await saveToDB('indigo_app_data_gallery_meta', galleryData); } catch { /* next load rescans */ }
       }
 
-      setGallery(galleryData);
+      // Merge, don't overwrite: something may have called addToGallery /
+      // addMultipleToGallery while this scan was running (most commonly, a
+      // profile photo saved right after app launch, racing the automatic
+      // background gallery load). A plain setGallery(galleryData) would wipe
+      // that brand-new item straight out of state — it isn't on disk yet, so
+      // it can't be in this scan's results — which orphaned the persona's
+      // referenceImageGalleryId permanently (see syncReferenceImageGalleryLink's
+      // self-heal for the recovery half of this fix). Keep anything present
+      // in the live state that this scan doesn't know about yet.
+      const scannedIds = new Set(galleryData.map(item => item.id));
+      setGallery(prev => {
+        const extras = prev.filter(item => !scannedIds.has(item.id));
+        return extras.length > 0 ? [...extras, ...galleryData] : galleryData;
+      });
       // Mark everything just loaded as already "saved" so the save effect
       // doesn't immediately re-write anything back to IndexedDB.
       const loadedMap = new Map<string, GalleryItem>();
@@ -1610,10 +1623,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     if (oldGalleryId) {
-      // Photo changed — update the existing mirrored item in place rather
-      // than creating a new one each time a profile photo is edited.
-      updateGalleryItem(oldGalleryId, { url: newVal, timestamp: Date.now() } as any);
-      return oldGalleryId;
+      // Verify the linked item actually still exists before assuming an
+      // update will land somewhere. If it doesn't — e.g. an earlier bug or
+      // a race during app startup dropped the mirrored item from the
+      // gallery after this id was already assigned to the persona —
+      // updateGalleryItem() below would silently do nothing (its id matches
+      // no item), leaving the persona pointed at a permanent ghost that no
+      // amount of re-uploading could ever fix. Detect that and fall through
+      // to create a fresh item instead, self-healing the link.
+      const stillExists = !galleryLoaded || gallery.some(item => item.id === oldGalleryId);
+      if (stillExists) {
+        // Photo changed — update the existing mirrored item in place rather
+        // than creating a new one each time a profile photo is edited.
+        updateGalleryItem(oldGalleryId, { url: newVal, timestamp: Date.now() } as any);
+        return oldGalleryId;
+      }
     }
 
     const newId = `profile-${personaId || 'user'}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
