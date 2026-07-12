@@ -142,6 +142,7 @@ interface AppContextType extends AppState {
   firebaseKBRestore: (onProgress?: (done: number, total: number) => void) => Promise<number>;
   firebaseChatBackup: (sessions: ChatSession[], activeSessionId: string | null) => Promise<number>;
   firebaseChatRestore: () => Promise<number>;
+  applyRestoredSessions: (sessions: ChatSession[], activeSessionId: string | null) => Promise<void>;
   lastChatBackupTime: number | null;
   setLastChatBackupTime: (t: number | null) => void;
   realTimeSyncEnabled: boolean;
@@ -2003,6 +2004,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return restored.sessions.length;
   };
 
+  // Applies sessions/activeSessionId fetched from ANY backup source (Drive,
+  // Firebase Storage, local auto-backup) into MemoryService — the actual
+  // store; ChatContext's setSessions is a no-op, same as importData's restore.
+  const applyRestoredSessions = async (sessions: ChatSession[], activeSessionId: string | null): Promise<void> => {
+    await memoryService.restoreSessions(sessions, activeSessionId);
+  };
+
   const setFcmToken = (token: string | null) => {
     setFcmTokenState(token);
   };
@@ -2555,7 +2563,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setLastCloudSyncTime, setLastFirebaseBackupTime, setLastGalleryBackupTime,
       lastKBBackupTime, setLastKBBackupTime,
       lastChatBackupTime, setLastChatBackupTime,
-      firebaseChatBackup, firebaseChatRestore,
+      firebaseChatBackup, firebaseChatRestore, applyRestoredSessions,
       lastAutoJsonBackupTime, setLastAutoJsonBackupTime,
       restoreFromLocalAutoBackup, saveLocalAutoBackup,
       anthropicApiKey, setAnthropicApiKey,
