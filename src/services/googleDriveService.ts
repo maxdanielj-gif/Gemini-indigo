@@ -93,71 +93,129 @@ export interface GalleryBackupItem {
 }
 
 /**
- * Backs up the gallery to Google Drive appDataFolder.
- * Creates the file if it doesn't exist, overwrites if it does.
+ * Backs up the gallery to Google Drive appDataFolder as a single JSON file.
+ *
+ * Items are supplied one at a time by an async generator (typically read
+ * straight from IndexedDB) and streamed to Drive using a resumable upload —
+ * so the phone never holds more than ~one image plus one upload chunk in
+ * memory, no matter how large the gallery is. The old approach
+ * (JSON.stringify the entire gallery into one giant string) crashed the tab
+ * once the gallery outgrew the browser's memory budget.
+ *
  * Returns the number of images backed up.
  */
 export async function driveBackupGallery(
-  gallery: GalleryBackupItem[],
+  loadItems: () => AsyncIterable<GalleryBackupItem>,
   onProgress?: (step: string) => void,
 ): Promise<number> {
   onProgress?.('Signing in to Google Drive…');
-  await getAccessToken();
+  const token = await getAccessToken();
 
-  // For http URLs, fetch and convert to base64 so the backup is self-contained
-  onProgress?.('Preparing images…');
-  const items: GalleryBackupItem[] = [];
-  for (const item of gallery) {
-    if (item.url.startsWith('data:') || item.url.startsWith('blob:')) {
-      items.push(item);
-    } else if (item.url.startsWith('http')) {
-      try {
-        const r = await fetch(item.url);
-        if (!r.ok) { items.push(item); continue; } // keep original URL if fetch fails
-        const blob = await r.blob();
-        const b64 = await new Promise<string>((res) => {
-          const reader = new FileReader();
-          reader.onloadend = () => res(reader.result as string);
-          reader.readAsDataURL(blob);
-        });
-        items.push({ ...item, url: b64 });
-      } catch {
-        items.push(item); // keep original on error
-      }
-    } else {
-      items.push(item);
-    }
-  }
-
-  onProgress?.('Uploading to Google Drive…');
-  const body = JSON.stringify({ version: 1, backedUpAt: Date.now(), items });
-  const metadata = { name: BACKUP_FILENAME, mimeType: 'application/json', parents: ['appDataFolder'] };
-
+  onProgress?.('Preparing upload…');
   const existingId = await findBackupFileId();
 
-  if (existingId) {
-    // Update existing file (PATCH)
-    const form = new FormData();
-    form.append('metadata', new Blob([JSON.stringify({ name: BACKUP_FILENAME, mimeType: 'application/json' })], { type: 'application/json' }));
-    form.append('file', new Blob([body], { type: 'application/json' }));
-    const r = await fetch(
-      `https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=multipart`,
-      { method: 'PATCH', headers: { Authorization: `Bearer ${currentToken}` }, body: form },
-    );
-    if (!r.ok) throw new Error(`Drive upload failed: ${r.status} ${await r.text()}`);
-  } else {
-    // Create new file
-    const form = new FormData();
-    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-    form.append('file', new Blob([body], { type: 'application/json' }));
-    const r = await fetch(
-      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
-      { method: 'POST', headers: { Authorization: `Bearer ${currentToken}` }, body: form },
-    );
-    if (!r.ok) throw new Error(`Drive upload failed: ${r.status} ${await r.text()}`);
-  }
+  // ── Open a resumable upload session ──
+  const sessionResp = existingId
+    ? await fetch(`https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=resumable`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: BACKUP_FILENAME, mimeType: 'application/json' }),
+      })
+    : await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: BACKUP_FILENAME, mimeType: 'application/json', parents: ['appDataFolder'] }),
+      });
+  if (!sessionResp.ok) throw new Error(`Drive upload failed to start: ${sessionResp.status} ${await sessionResp.text().catch(() => '')}`);
+  const sessionUri = sessionResp.headers.get('Location') || sessionResp.headers.get('location');
+  if (!sessionUri) throw new Error('Drive did not return an upload session. Please try again.');
 
-  return items.length;
+  // ── Stream the JSON body in 4 MB chunks (must be multiples of 256 KiB) ──
+  const encoder = new TextEncoder();
+  const CHUNK = 4 * 1024 * 1024;
+  let pending: Uint8Array[] = [];
+  let pendingBytes = 0;
+  let offset = 0;
+
+  const takeBytes = (n: number): Uint8Array => {
+    const out = new Uint8Array(n);
+    let filled = 0;
+    while (filled < n) {
+      const head = pending[0];
+      const need = n - filled;
+      if (head.length <= need) {
+        out.set(head, filled);
+        filled += head.length;
+        pending.shift();
+      } else {
+        out.set(head.subarray(0, need), filled);
+        pending[0] = head.subarray(need);
+        filled += need;
+      }
+    }
+    pendingBytes -= n;
+    return out;
+  };
+
+  const putChunk = async (bytes: Uint8Array, isLast: boolean): Promise<void> => {
+    const total = isLast ? String(offset + bytes.length) : '*';
+    const resp = await fetch(sessionUri, {
+      method: 'PUT',
+      headers: {
+        'Content-Range': bytes.length > 0
+          ? `bytes ${offset}-${offset + bytes.length - 1}/${total}`
+          : `bytes */${total}`,
+        'Content-Type': 'application/octet-stream',
+      },
+      body: bytes as unknown as BodyInit,
+    });
+    // 308 = "keep going"; 200/201 = final chunk accepted
+    if (resp.status !== 308 && !resp.ok) {
+      throw new Error(`Drive upload failed at ${Math.round(offset / 1024 / 1024)} MB: ${resp.status} ${await resp.text().catch(() => '')}`);
+    }
+    offset += bytes.length;
+  };
+
+  const push = async (text: string): Promise<void> => {
+    const bytes = encoder.encode(text);
+    pending.push(bytes);
+    pendingBytes += bytes.length;
+    while (pendingBytes >= CHUNK) {
+      await putChunk(takeBytes(CHUNK), false);
+    }
+  };
+
+  // ── Body ──
+  await push(`{"version":1,"backedUpAt":${Date.now()},"items":[`);
+  let count = 0;
+  for await (const raw of loadItems()) {
+    let item = raw;
+    // For http URLs, fetch and convert to base64 so the backup is self-contained
+    if (item.url?.startsWith('http')) {
+      try {
+        const r = await fetch(item.url);
+        if (r.ok) {
+          const blob = await r.blob();
+          const b64 = await new Promise<string>((res) => {
+            const reader = new FileReader();
+            reader.onloadend = () => res(reader.result as string);
+            reader.readAsDataURL(blob);
+          });
+          item = { ...item, url: b64 };
+        }
+      } catch { /* keep original URL on error */ }
+    }
+    await push((count > 0 ? ',' : '') + JSON.stringify(item));
+    count++;
+    onProgress?.(`Uploading image ${count}…`);
+  }
+  await push(']}');
+
+  // Flush the remainder as the final chunk (any size is allowed for the last one)
+  const rest = pendingBytes > 0 ? takeBytes(pendingBytes) : new Uint8Array(0);
+  await putChunk(rest, true);
+
+  return count;
 }
 
 /**
