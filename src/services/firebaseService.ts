@@ -513,3 +513,79 @@ export async function restoreKnowledgeBaseFromFirebaseStorage(
 
   return restored;
 }
+
+// ── Upload chat history to Firebase Storage ────────────────────────────────────
+// Chat history/sessions were never included in the Firestore backup document
+// (correctly so — full conversation history can easily exceed Firestore's
+// 1 MiB per-document limit, the same problem that used to break image
+// backups). This gives it the same Storage-based treatment as the gallery
+// and knowledge base: one JSON file in Storage, with just a small pointer/
+// size record in Firestore.
+export async function uploadChatHistoryToFirebaseStorage(
+  userId: string,
+  sessions: any[],
+  activeSessionId: string | null,
+  runtime?: FirebaseRuntimeConfig,
+): Promise<number> {
+  if (!userId?.trim()) throw new Error("A User ID is required. Set one in Settings → Cloud Sync.");
+  if (!Array.isArray(sessions) || sessions.length === 0) return 0;
+
+  const app = getApp(runtime);
+  if (!currentStorage) currentStorage = getStorage(app);
+  const storage = currentStorage;
+  const db = getDb(runtime);
+
+  const body = JSON.stringify({ version: 1, backedUpAt: Date.now(), sessions, activeSessionId });
+  const path = `${userId.trim()}/chat-history.json`;
+  const fileRef = storageRef(storage, path);
+
+  await withTimeout(
+    uploadString(fileRef, body, 'raw', { contentType: 'application/json' }),
+    60_000,
+    'uploading chat history',
+  );
+
+  const messageCount = sessions.reduce((sum, s) => sum + (Array.isArray(s?.messages) ? s.messages.length : 0), 0);
+
+  await setDoc(doc(db, 'indigo_chat_manifests', userId.trim()), {
+    updatedAt:     serverTimestamp(),
+    path,
+    sessionCount:  sessions.length,
+    messageCount,
+    sizeBytes:     body.length,
+    version:       1,
+  });
+
+  return sessions.length;
+}
+
+// ── Restore chat history from Firebase Storage ─────────────────────────────────
+// Returns null if no backup exists for this user (not an error — perfectly
+// normal for a first-ever backup).
+export async function restoreChatHistoryFromFirebaseStorage(
+  userId: string,
+  runtime?: FirebaseRuntimeConfig,
+): Promise<{ sessions: any[]; activeSessionId: string | null } | null> {
+  if (!userId?.trim()) throw new Error("A User ID is required. Set one in Settings → Cloud Sync.");
+
+  const db   = getDb(runtime);
+  const snap = await getDoc(doc(db, 'indigo_chat_manifests', userId.trim()));
+  if (!snap.exists()) return null;
+
+  const path = snap.data().path as string | undefined;
+  if (!path) return null;
+
+  const app = getApp(runtime);
+  if (!currentStorage) currentStorage = getStorage(app);
+  const storage = currentStorage;
+
+  const fileRef = storageRef(storage, path);
+  const downloadUrl = await getDownloadURL(fileRef);
+  const response = await fetch(downloadUrl);
+  if (!response.ok) throw new Error(`Failed to download chat history: HTTP ${response.status}`);
+
+  const parsed = await response.json();
+  if (!Array.isArray(parsed?.sessions)) throw new Error('Chat history backup format not recognised.');
+
+  return { sessions: parsed.sessions, activeSessionId: parsed.activeSessionId ?? null };
+}
