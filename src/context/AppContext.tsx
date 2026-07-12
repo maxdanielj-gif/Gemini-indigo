@@ -175,6 +175,7 @@ interface AppContextType extends AppState {
   setIsSyncing: (syncing: boolean) => void;
   galleryLoaded: boolean;
   loadGallery: () => Promise<void>;
+  reloadGallery: () => Promise<void>;
   currentUser: FirebaseUser | null;
   authLoading: boolean;
   signInWithGoogle: () => Promise<void>;
@@ -273,8 +274,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // have a few dozen of them all loaded into memory simultaneously.
   const OVERSIZED_ITEM_THRESHOLD_CHARS = 8 * 1024 * 1024; // ~8MB of base64 text
 
-  const loadGallery = async () => {
-    if (galleryLoaded) return;
+  const doLoadGallery = async () => {
     console.log("Loading gallery items lazily...", Date.now());
     let galleryData: GalleryItem[] = [];
     const galleryIds = await loadFromDB('indigo_app_data_gallery_ids');
@@ -325,6 +325,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     savedGalleryItemsRef.current = loadedMap;
     setGalleryLoaded(true);
     console.log("Gallery items loaded lazily", Date.now());
+  };
+
+  const loadGallery = async () => {
+    if (galleryLoaded) return;
+    await doLoadGallery();
+  };
+
+  // Re-reads the gallery from IndexedDB even if it's already loaded. Used after
+  // a restore writes images straight to disk (bypassing React state so the
+  // whole gallery is never held in memory at once during the download).
+  const reloadGallery = async () => {
+    await doLoadGallery();
   };
 
   const [journal, setJournal] = useState<JournalEntry[]>([]);
@@ -1923,7 +1935,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // 3. Restore Other App State
       setUserProfileState(parsed.userProfile || userProfile);
-      setGallery(parsed.gallery || []);
+      // Only replace the gallery if the backup actually contains gallery items.
+      // Firestore "Restore All" backups deliberately do NOT include the gallery
+      // (it lives in its own Drive/Storage backup) — the old unconditional
+      // setGallery(parsed.gallery || []) emptied the in-memory gallery here,
+      // which made the gallery save effect write an empty id list and DELETE
+      // every image from IndexedDB during step 1 of a full restore.
+      if (Array.isArray(parsed.gallery) && parsed.gallery.length > 0) {
+        setGallery(parsed.gallery);
+      }
       setJournal(parsed.journal || []);
       setKnowledgeBase(parsed.knowledgeBase || []);
       setMemories(parsed.memories || []);
@@ -2088,7 +2108,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   return (
     <AppContext.Provider value={{
       aiProfile, setAIProfile, savePersona, deletePersona, loadPersona,
-      savedPersonas, galleryLoaded, loadGallery,
+      savedPersonas, galleryLoaded, loadGallery, reloadGallery,
       userProfile, setUserProfile, setUserReferenceImage,
       gallery, addToGallery, addMultipleToGallery, deleteImageFromGallery, deleteImagesFromGallery, updateGalleryItem,
       journal, addJournalEntry, updateJournalEntry, deleteJournalEntry,
