@@ -176,6 +176,7 @@ interface AppContextType extends AppState {
   galleryLoaded: boolean;
   loadGallery: () => Promise<void>;
   reloadGallery: () => Promise<void>;
+  getGalleryItemUrl: (id: string) => Promise<string | null>;
   currentUser: FirebaseUser | null;
   authLoading: boolean;
   signInWithGoogle: () => Promise<void>;
@@ -299,9 +300,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (galleryIds && Array.isArray(galleryIds)) {
         // Sequential, not Promise.all — loading dozens of large base64
         // strings in parallel spikes peak memory far higher than loading
-        // them one at a time. Oversized items are represented by a tiny
-        // metadata-only placeholder; their full data stays on disk and is
-        // never held in memory at all.
+        // them one at a time.
+        //
+        // Only lightweight METADATA is kept in memory for every item — the
+        // base64 image data itself stays on disk and is fetched on demand by
+        // the Gallery screen (see getGalleryItemUrl) only while an item is
+        // actually visible. Holding every image's base64 in React state was
+        // fine for a small gallery, but past a certain total size it exceeds
+        // the memory a phone browser gives a tab and crashes it the moment
+        // the gallery loads.
         for (const id of galleryIds) {
             let itemStr = await loadFromDB(`indigo_app_data_gallery_item_${id}`);
             if (!itemStr) continue;
@@ -310,24 +317,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             try {
                 const parsed = isString ? JSON.parse(itemStr) : itemStr;
                 itemStr = null; // release the raw string before deciding what to keep
-                if (approxLen > OVERSIZED_ITEM_THRESHOLD_CHARS) {
-                    // Keep only tiny metadata fields — deliberately NOT
-                    // spreading `parsed`, so the huge `url` string can be
-                    // garbage-collected immediately.
-                    galleryData.push({
-                        id: parsed.id ?? id,
-                        type: parsed.type ?? 'uploaded',
-                        mediaType: parsed.mediaType,
-                        url: '', // deliberately not held in memory
-                        prompt: parsed.prompt,
-                        timestamp: parsed.timestamp ?? 0,
-                        personaId: parsed.personaId,
-                        oversized: true,
-                        approxSizeMB: Math.round((approxLen / 1024 / 1024) * 10) / 10,
-                    });
-                } else {
-                    galleryData.push(parsed);
-                }
+                const url: string = typeof parsed.url === 'string' ? parsed.url : '';
+                const inferredMediaType = parsed.mediaType
+                  ?? (url.startsWith('data:video/') || url.includes('.mp4') || url.includes('.webm') ? 'video' : 'image');
+                const oversized = approxLen > OVERSIZED_ITEM_THRESHOLD_CHARS;
+                galleryData.push({
+                    id: parsed.id ?? id,
+                    type: parsed.type ?? 'uploaded',
+                    mediaType: inferredMediaType,
+                    url: '', // image data deliberately not held in memory
+                    prompt: parsed.prompt,
+                    provider: parsed.provider,
+                    timestamp: parsed.timestamp ?? parsed.createdAt ?? 0,
+                    personaId: parsed.personaId,
+                    onDisk: true, // full data lives in IndexedDB — never overwrite it with this placeholder
+                    ...(oversized ? { oversized: true, approxSizeMB: Math.round((approxLen / 1024 / 1024) * 10) / 10 } : {}),
+                } as any);
             } catch {
                 console.error(`Gallery item ${id} could not be parsed and was skipped.`);
             }
@@ -356,6 +361,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const reloadGallery = async () => {
     await doLoadGallery();
   };
+
+  // ── On-demand image data loader ──────────────────────────────────────────────
+  // Gallery state only holds metadata; this fetches one item's actual image
+  // data from IndexedDB when the Gallery screen needs to show it. A small
+  // most-recently-used cache keeps scrolling back and forth smooth without
+  // letting memory grow with gallery size.
+  const galleryUrlCacheRef = useRef<Map<string, string>>(new Map());
+  const GALLERY_URL_CACHE_MAX = 24;
+  const getGalleryItemUrl = React.useCallback(async (id: string): Promise<string | null> => {
+    // Freshly added items (this session) still carry their url in state
+    const inState = gallery.find(g => g.id === id);
+    if (inState?.url) return inState.url;
+
+    const cache = galleryUrlCacheRef.current;
+    const cached = cache.get(id);
+    if (cached) {
+      cache.delete(id);
+      cache.set(id, cached); // bump to most-recent
+      return cached;
+    }
+
+    try {
+      const itemStr = await loadFromDB(`indigo_app_data_gallery_item_${id}`);
+      if (!itemStr) return null;
+      const parsed = typeof itemStr === 'string' ? JSON.parse(itemStr) : itemStr;
+      const url: string | null = typeof parsed?.url === 'string' && parsed.url ? parsed.url : null;
+      if (url) {
+        cache.set(id, url);
+        while (cache.size > GALLERY_URL_CACHE_MAX) {
+          const oldest = cache.keys().next().value;
+          if (oldest === undefined) break;
+          cache.delete(oldest);
+        }
+      }
+      return url;
+    } catch {
+      return null;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gallery]);
 
   const [journal, setJournal] = useState<JournalEntry[]>([]);
   const [knowledgeBase, setKnowledgeBase] = useState<{ name: string; content: string }[]>([]);
@@ -1085,12 +1130,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const previouslySaved = savedGalleryItemsRef.current;
         const nowSaved = new Map<string, GalleryItem>();
         for (const item of gallery) {
-          if (item.oversized) {
+          if (item.oversized || (item as any).onDisk) {
             // The full data for this item is already on disk and was never
             // loaded into memory. Writing the in-memory placeholder (which
             // has an intentionally empty url) would destroy it — so leave
             // the stored copy completely untouched. Its id remains in
             // galleryIds, which protects it from the cleanup pass below.
+            // Metadata edits to these items are written through to disk by
+            // updateGalleryItem itself.
             nowSaved.set(item.id, item);
             continue;
           }
@@ -1457,6 +1504,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateGalleryItem = (id: string, updates: Partial<GalleryItem>) => {
     setGallery(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
+    // For items whose image data lives only on disk, the save effect
+    // deliberately never writes them — so metadata changes (persona
+    // reassignment, prompt edits) must be merged into the stored copy here.
+    const target = gallery.find(item => item.id === id) as any;
+    if (target && (target.onDisk || target.oversized)) {
+      loadFromDB(`indigo_app_data_gallery_item_${id}`).then((itemStr: any) => {
+        if (!itemStr) return;
+        const parsed = typeof itemStr === 'string' ? JSON.parse(itemStr) : itemStr;
+        return saveToDB(`indigo_app_data_gallery_item_${id}`, JSON.stringify({ ...parsed, ...updates }));
+      }).catch(e => console.error('Failed to write gallery item update to disk:', e));
+    }
     saveData();
   };
 
@@ -1653,21 +1711,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const firebaseGalleryBackup = async (onProgress?: (done: number, total: number) => void): Promise<number> => {
     if (!userId) throw new Error("Set a User ID in Cloud Sync settings before backing up the gallery.");
-    // Always read directly from IndexedDB so we get every saved item regardless
-    // of whether the Gallery screen has been visited this session.
-    let galleryToBackup: GalleryItem[] = gallery;
+    // Always read full items directly from IndexedDB — gallery state now holds
+    // metadata only (empty urls), and sequential loading keeps peak memory low.
+    let galleryToBackup: GalleryItem[] = [];
     const galleryIds = await loadFromDB('indigo_app_data_gallery_ids');
-    if (galleryIds && Array.isArray(galleryIds) && galleryIds.length > 0) {
-      const items = await Promise.all(
-        galleryIds.map(async (id: string) => {
+    if (galleryIds && Array.isArray(galleryIds)) {
+      for (const id of galleryIds) {
+        try {
           const itemStr = await loadFromDB(`indigo_app_data_gallery_item_${id}`);
-          return itemStr ? (typeof itemStr === 'string' ? JSON.parse(itemStr) : itemStr) : null;
-        })
-      );
-      const idbItems = items.filter((item): item is GalleryItem => item !== null);
-      // Use whichever source has more items
-      if (idbItems.length >= galleryToBackup.length) {
-        galleryToBackup = idbItems;
+          if (!itemStr) continue;
+          const parsed = typeof itemStr === 'string' ? JSON.parse(itemStr) : itemStr;
+          if (parsed?.url) galleryToBackup.push(parsed);
+        } catch { /* skip corrupt item */ }
       }
     }
     if (galleryToBackup.length === 0) {
@@ -1762,6 +1817,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return importGalleryChunks([compressedData]);
   };
 
+  // WARNING: reads gallery state, which now holds metadata only (empty urls).
+  // Not called from any screen — if ever revived, load items from IndexedDB.
   const exportGalleryChunks = async (chunkSize: number = 2, mediaType?: 'image' | 'video') => {
     const chunks: Uint8Array[] = [];
     
@@ -2186,7 +2243,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   return (
     <AppContext.Provider value={{
       aiProfile, setAIProfile, savePersona, deletePersona, loadPersona,
-      savedPersonas, galleryLoaded, loadGallery, reloadGallery,
+      savedPersonas, galleryLoaded, loadGallery, reloadGallery, getGalleryItemUrl,
       userProfile, setUserProfile, setUserReferenceImage,
       gallery, addToGallery, addMultipleToGallery, deleteImageFromGallery, deleteImagesFromGallery, updateGalleryItem,
       journal, addJournalEntry, updateJournalEntry, deleteJournalEntry,
