@@ -9,7 +9,7 @@ import ThemeToggle from './ThemeToggle';
 const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const location = useLocation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const { isSyncing, aiProfile } = useApp();
+  const { isSyncing, aiProfile, galleryLoading } = useApp();
 
   const navItems = [
     { path: '/chat', icon: MessageSquare, label: 'Chat' },
@@ -90,6 +90,9 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                     >
                       <item.icon className={`w-5 h-5 mr-3 ${location.pathname === item.path ? 'text-indigo-600 dark:text-indigo-400' : 'text-indigo-900 dark:text-indigo-100'}`} />
                       <span className="font-medium">{item.label}</span>
+                      {item.path === '/gallery' && galleryLoading && (
+                        <RefreshCw className="w-3.5 h-3.5 ml-2 animate-spin text-indigo-400" />
+                      )}
                     </Link>
                   ))}
                 </div>
