@@ -19,7 +19,7 @@ const SettingsScreen: React.FC = () => {
     resetApp, aiProfile, userProfile,
     notificationsEnabled, setNotificationsEnabled,
     fcmToken, setFcmToken,
-    exportData, addToast, addToGallery,
+    exportData, addToast, addToGallery, addMultipleToGallery,
     showTimestamps, setShowTimestamps,
     timeZone, setTimeZone,
     userId, setUserId,
@@ -262,11 +262,13 @@ const SettingsScreen: React.FC = () => {
           setFullRestoreStep('Step 2 / 2 — Downloading gallery from Google Drive…');
           const items = await driveRestoreGallery((step) => setFullRestoreStep(`Step 2 / 2 — ${step}`));
           if (items) {
-            let added = 0;
-            for (const item of items) {
-              const exists = gallery.some((g: any) => g.id === item.id);
-              if (!exists) { addToGallery(item as any); added++; }
-            }
+            // Batch this into a single gallery update instead of calling
+            // addToGallery() once per image — one-at-a-time additions each
+            // re-save the whole (growing) gallery to IndexedDB, which for a
+            // large restore can crash the tab on phones.
+            const toAdd = items.filter(item => !gallery.some((g: any) => g.id === item.id));
+            addMultipleToGallery(toAdd as any);
+            const added = toAdd.length;
             galleryMsg = added > 0 ? ` ${added} gallery image(s) restored from Google Drive.` : ' Gallery already up to date.';
           } else {
             galleryMsg = ' No gallery backup found in Google Drive.';
@@ -302,13 +304,11 @@ const SettingsScreen: React.FC = () => {
         return;
       }
       let added = 0;
-      for (const item of items) {
-        const exists = gallery.some((g: any) => g.id === item.id);
-        if (!exists) {
-          addToGallery(item as any);
-          added++;
-        }
-      }
+      // Batch this into a single gallery update instead of calling
+      // addToGallery() once per image — see comment in handleFullFirebaseRestore.
+      const toAdd = items.filter(item => !gallery.some((g: any) => g.id === item.id));
+      addMultipleToGallery(toAdd as any);
+      added = toAdd.length;
       addToast({
         title: 'Gallery restored',
         message: added > 0
