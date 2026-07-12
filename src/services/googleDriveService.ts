@@ -70,14 +70,85 @@ async function getAccessToken(): Promise<string> {
 }
 
 // ── Find existing backup file ID ──────────────────────────────────────────────
-async function findBackupFileId(): Promise<string | null> {
+async function findBackupFileId(filename: string = BACKUP_FILENAME): Promise<string | null> {
   const resp = await (window as any).gapi.client.drive.files.list({
     spaces: 'appDataFolder',
     fields: 'files(id, name)',
-    q: `name = '${BACKUP_FILENAME}'`,
+    q: `name = '${filename}'`,
   });
   const files = resp.result.files || [];
   return files.length > 0 ? files[0].id : null;
+}
+
+// ── Generic small-JSON backup/restore ──────────────────────────────────────────
+// For data that's reliably small (knowledge base text files, chat history —
+// unlike the gallery, there's no base64 image data involved), a plain
+// whole-file upload/download is simpler than the gallery's streaming
+// approach and doesn't need it: even a large personal knowledge base or years
+// of chat text is a rounding error next to a single photo.
+async function driveBackupJson(filename: string, payload: any): Promise<void> {
+  const token = await getAccessToken();
+  const existingId = await findBackupFileId(filename);
+  const body = JSON.stringify(payload);
+
+  if (existingId) {
+    const form = new FormData();
+    form.append('metadata', new Blob([JSON.stringify({ name: filename, mimeType: 'application/json' })], { type: 'application/json' }));
+    form.append('file', new Blob([body], { type: 'application/json' }));
+    const r = await fetch(
+      `https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=multipart`,
+      { method: 'PATCH', headers: { Authorization: `Bearer ${token}` }, body: form },
+    );
+    if (!r.ok) throw new Error(`Drive upload failed: ${r.status} ${await r.text().catch(() => '')}`);
+  } else {
+    const form = new FormData();
+    form.append('metadata', new Blob([JSON.stringify({ name: filename, mimeType: 'application/json', parents: ['appDataFolder'] })], { type: 'application/json' }));
+    form.append('file', new Blob([body], { type: 'application/json' }));
+    const r = await fetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
+      { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form },
+    );
+    if (!r.ok) throw new Error(`Drive upload failed: ${r.status} ${await r.text().catch(() => '')}`);
+  }
+}
+
+async function driveRestoreJson(filename: string): Promise<any | null> {
+  await getAccessToken();
+  const fileId = await findBackupFileId(filename);
+  if (!fileId) return null;
+  const legacy = await (window as any).gapi.client.drive.files.get({ fileId, alt: 'media' });
+  return typeof legacy.body === 'string' ? JSON.parse(legacy.body) : legacy.result;
+}
+
+// ── Knowledge Base ──────────────────────────────────────────────────────────────
+export interface KBBackupFile { name: string; content: string; }
+
+export async function driveBackupKnowledgeBase(files: KBBackupFile[]): Promise<number> {
+  const valid = files.filter(f => f.name && f.content != null);
+  if (valid.length === 0) return 0;
+  await driveBackupJson('indigo_kb_backup.json', { version: 1, backedUpAt: Date.now(), files: valid });
+  return valid.length;
+}
+
+export async function driveRestoreKnowledgeBase(): Promise<KBBackupFile[] | null> {
+  const parsed = await driveRestoreJson('indigo_kb_backup.json');
+  if (!parsed) return null;
+  if (!Array.isArray(parsed.files)) throw new Error('Knowledge base backup format not recognised.');
+  return parsed.files;
+}
+
+// ── Chat History ──────────────────────────────────────────────────────────────
+export async function driveBackupChatHistory(sessions: any[], activeSessionId: string | null): Promise<number> {
+  if (!Array.isArray(sessions) || sessions.length === 0) return 0;
+  await driveBackupJson('indigo_chat_backup.json', { version: 1, backedUpAt: Date.now(), sessions, activeSessionId });
+  return sessions.length;
+}
+
+export async function driveRestoreChatHistory(): Promise<{ sessions: any[]; activeSessionId: string | null } | null> {
+  const parsed = await driveRestoreJson('indigo_chat_backup.json');
+  if (!parsed) return null;
+  if (!Array.isArray(parsed.sessions)) throw new Error('Chat history backup format not recognised.');
+  return { sessions: parsed.sessions, activeSessionId: parsed.activeSessionId ?? null };
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
