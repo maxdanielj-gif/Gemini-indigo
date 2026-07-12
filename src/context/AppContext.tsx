@@ -177,6 +177,7 @@ interface AppContextType extends AppState {
   loadGallery: () => Promise<void>;
   reloadGallery: () => Promise<void>;
   getGalleryItemUrl: (id: string) => Promise<string | null>;
+  galleryLoading: boolean;
   currentUser: FirebaseUser | null;
   authLoading: boolean;
   signInWithGoogle: () => Promise<void>;
@@ -293,65 +294,98 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // have a few dozen of them all loaded into memory simultaneously.
   const OVERSIZED_ITEM_THRESHOLD_CHARS = 8 * 1024 * 1024; // ~8MB of base64 text
 
-  const doLoadGallery = async () => {
-    console.log("Loading gallery items lazily...", Date.now());
-    let galleryData: GalleryItem[] = [];
-    const galleryIds = await loadFromDB('indigo_app_data_gallery_ids');
-    if (galleryIds && Array.isArray(galleryIds)) {
-        // Sequential, not Promise.all — loading dozens of large base64
-        // strings in parallel spikes peak memory far higher than loading
-        // them one at a time.
-        //
-        // Only lightweight METADATA is kept in memory for every item — the
-        // base64 image data itself stays on disk and is fetched on demand by
-        // the Gallery screen (see getGalleryItemUrl) only while an item is
-        // actually visible. Holding every image's base64 in React state was
-        // fine for a small gallery, but past a certain total size it exceeds
-        // the memory a phone browser gives a tab and crashes it the moment
-        // the gallery loads.
-        for (const id of galleryIds) {
-            let itemStr = await loadFromDB(`indigo_app_data_gallery_item_${id}`);
-            if (!itemStr) continue;
-            const isString = typeof itemStr === 'string';
-            const approxLen = isString ? itemStr.length : JSON.stringify(itemStr).length;
-            try {
-                const parsed = isString ? JSON.parse(itemStr) : itemStr;
-                itemStr = null; // release the raw string before deciding what to keep
-                const url: string = typeof parsed.url === 'string' ? parsed.url : '';
-                const inferredMediaType = parsed.mediaType
-                  ?? (url.startsWith('data:video/') || url.includes('.mp4') || url.includes('.webm') ? 'video' : 'image');
-                const oversized = approxLen > OVERSIZED_ITEM_THRESHOLD_CHARS;
-                galleryData.push({
-                    id: parsed.id ?? id,
-                    type: parsed.type ?? 'uploaded',
-                    mediaType: inferredMediaType,
-                    url: '', // image data deliberately not held in memory
-                    prompt: parsed.prompt,
-                    provider: parsed.provider,
-                    timestamp: parsed.timestamp ?? parsed.createdAt ?? 0,
-                    personaId: parsed.personaId,
-                    onDisk: true, // full data lives in IndexedDB — never overwrite it with this placeholder
-                    ...(oversized ? { oversized: true, approxSizeMB: Math.round((approxLen / 1024 / 1024) * 10) / 10 } : {}),
-                } as any);
-            } catch {
-                console.error(`Gallery item ${id} could not be parsed and was skipped.`);
-            }
-        }
+  // Guards: only ONE gallery load may ever run at a time. During app startup
+  // the Gallery screen's load effect re-fires repeatedly (the app is still
+  // settling, which re-renders the provider and hands the screen a fresh
+  // loadGallery reference each time). Previously every re-fire started
+  // ANOTHER full read of all gallery items in parallel — several concurrent
+  // scans each holding multi-MB images in flight is exactly the memory spike
+  // that crashed the tab when opening the gallery right after app launch.
+  const galleryLoadInFlightRef = useRef(false);
+  const galleryLoadedRef = useRef(false);
+  const [galleryLoading, setGalleryLoading] = useState(false);
+
+  // Reads every stored item once to build the lightweight index. Only needed
+  // the first time after this update, or if the index ever falls out of step
+  // with the id list (it then self-heals here).
+  const scanAllItemMetadata = async (galleryIds: string[]): Promise<GalleryItem[]> => {
+    const out: GalleryItem[] = [];
+    for (const id of galleryIds) {
+      let itemStr = await loadFromDB(`indigo_app_data_gallery_item_${id}`);
+      if (!itemStr) continue;
+      const isString = typeof itemStr === 'string';
+      const approxLen = isString ? itemStr.length : JSON.stringify(itemStr).length;
+      try {
+        const parsed = isString ? JSON.parse(itemStr) : itemStr;
+        itemStr = null; // release the raw string as soon as possible
+        const url: string = typeof parsed.url === 'string' ? parsed.url : '';
+        const inferredMediaType = parsed.mediaType
+          ?? (url.startsWith('data:video/') || url.includes('.mp4') || url.includes('.webm') ? 'video' : 'image');
+        const oversized = approxLen > OVERSIZED_ITEM_THRESHOLD_CHARS;
+        out.push({
+          id: parsed.id ?? id,
+          type: parsed.type ?? 'uploaded',
+          mediaType: inferredMediaType,
+          url: '', // image data deliberately not held in memory
+          prompt: parsed.prompt,
+          provider: parsed.provider,
+          timestamp: parsed.timestamp ?? parsed.createdAt ?? 0,
+          personaId: parsed.personaId,
+          onDisk: true, // full data lives in IndexedDB — never overwrite it with this placeholder
+          ...(oversized ? { oversized: true, approxSizeMB: Math.round((approxLen / 1024 / 1024) * 10) / 10 } : {}),
+        } as any);
+      } catch {
+        console.error(`Gallery item ${id} could not be parsed and was skipped.`);
+      }
     }
-    setGallery(galleryData);
-    // Mark everything just loaded from disk as already "saved" so that simply
-    // viewing the gallery (which triggers this load) doesn't cause the save
-    // effect below to immediately re-write every image back to IndexedDB —
-    // it should only write items that are actually new or changed.
-    const loadedMap = new Map<string, GalleryItem>();
-    for (const item of galleryData) loadedMap.set(item.id, item);
-    savedGalleryItemsRef.current = loadedMap;
-    setGalleryLoaded(true);
-    console.log("Gallery items loaded lazily", Date.now());
+    return out;
+  };
+
+  const doLoadGallery = async () => {
+    if (galleryLoadInFlightRef.current) return; // a load is already running — never start a second one
+    galleryLoadInFlightRef.current = true;
+    setGalleryLoading(true);
+    try {
+      console.log("Loading gallery index...", Date.now());
+      const galleryIds: string[] = (await loadFromDB('indigo_app_data_gallery_ids')) || [];
+
+      // Fast path: a single small index record holds the metadata for every
+      // item, so opening the gallery reads ONE tiny value — no full-size
+      // image data is touched at all.
+      let galleryData: GalleryItem[] | null = null;
+      try {
+        const meta = await loadFromDB('indigo_app_data_gallery_meta');
+        if (Array.isArray(meta)) {
+          const metaIds = new Set(meta.map((m: any) => m?.id));
+          const inStep = metaIds.size === galleryIds.length && galleryIds.every(id => metaIds.has(id));
+          if (inStep) galleryData = meta as GalleryItem[];
+        }
+      } catch { /* fall through to the one-time scan */ }
+
+      // Migration / self-heal: build the index once, then persist it so every
+      // future load takes the fast path.
+      if (!galleryData) {
+        galleryData = await scanAllItemMetadata(galleryIds);
+        try { await saveToDB('indigo_app_data_gallery_meta', galleryData); } catch { /* next load rescans */ }
+      }
+
+      setGallery(galleryData);
+      // Mark everything just loaded as already "saved" so the save effect
+      // doesn't immediately re-write anything back to IndexedDB.
+      const loadedMap = new Map<string, GalleryItem>();
+      for (const item of galleryData) loadedMap.set(item.id, item);
+      savedGalleryItemsRef.current = loadedMap;
+      galleryLoadedRef.current = true;
+      setGalleryLoaded(true);
+      console.log("Gallery index loaded", Date.now());
+    } finally {
+      galleryLoadInFlightRef.current = false;
+      setGalleryLoading(false);
+    }
   };
 
   const loadGallery = async () => {
-    if (galleryLoaded) return;
+    if (galleryLoadedRef.current || galleryLoaded) return;
     await doLoadGallery();
   };
 
@@ -473,6 +507,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     timestamp: number;
   } | null>(null);
   const [isSuccessfullyLoaded, setIsSuccessfullyLoaded] = useState(false);
+
+  // Kick off the gallery index load automatically once the rest of the app's
+  // data has loaded — instead of waiting for the person to open the Gallery
+  // screen. The load is single-flight-guarded (see doLoadGallery), so if they
+  // open Gallery while this is still running, that just waits on the same
+  // load rather than starting a second one. In practice the index is usually
+  // ready before they ever tap Gallery, so there's nothing left to wait for.
+  useEffect(() => {
+    if (!isSuccessfullyLoaded || galleryLoadedRef.current) return;
+    loadGallery();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSuccessfullyLoaded]);
   const [isPersonaSwitching, setIsPersonaSwitching] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showResetOption, setShowResetOption] = useState(false);
@@ -1127,6 +1173,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         const galleryIds = gallery.map(item => item.id);
         await saveToDB('indigo_app_data_gallery_ids', galleryIds);
+        // Keep the lightweight index in step — future gallery opens read this
+        // one small record instead of scanning every full-size item on disk.
+        const metaIndex = gallery.map(item => {
+          const anyItem = item as any;
+          const freshBig = !anyItem.onDisk && typeof item.url === 'string' && item.url.length > OVERSIZED_ITEM_THRESHOLD_CHARS;
+          return {
+            id: item.id,
+            type: anyItem.type ?? 'uploaded',
+            mediaType: anyItem.mediaType,
+            url: '',
+            prompt: anyItem.prompt,
+            provider: anyItem.provider,
+            timestamp: anyItem.timestamp ?? anyItem.createdAt ?? 0,
+            personaId: anyItem.personaId,
+            onDisk: true,
+            ...(anyItem.oversized || freshBig
+              ? { oversized: true, approxSizeMB: anyItem.approxSizeMB ?? Math.round(((item.url?.length || 0) / 1024 / 1024) * 10) / 10 }
+              : {}),
+          };
+        });
+        await saveToDB('indigo_app_data_gallery_meta', metaIndex);
         const previouslySaved = savedGalleryItemsRef.current;
         const nowSaved = new Map<string, GalleryItem>();
         for (const item of gallery) {
@@ -2243,7 +2310,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   return (
     <AppContext.Provider value={{
       aiProfile, setAIProfile, savePersona, deletePersona, loadPersona,
-      savedPersonas, galleryLoaded, loadGallery, reloadGallery, getGalleryItemUrl,
+      savedPersonas, galleryLoaded, loadGallery, reloadGallery, getGalleryItemUrl, galleryLoading,
       userProfile, setUserProfile, setUserReferenceImage,
       gallery, addToGallery, addMultipleToGallery, deleteImageFromGallery, deleteImagesFromGallery, updateGalleryItem,
       journal, addJournalEntry, updateJournalEntry, deleteJournalEntry,
