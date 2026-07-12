@@ -3,7 +3,7 @@ import { gzipSync, strToU8, gunzipSync, strFromU8 } from 'fflate';
 import { saveToDB, loadFromDB, deleteFromDB, clearDB } from '../services/db';
 import { onForegroundMessage, requestNotificationPermission } from '../services/webPushService';
 import { showNativeNotification } from '../services/notificationService';
-import { backupToFirestore, restoreFromFirestore, uploadGalleryToFirebaseStorage, restoreGalleryFromFirebaseStorage, uploadKnowledgeBaseToFirebaseStorage, restoreKnowledgeBaseFromFirebaseStorage, signInWithGoogle as fbSignInWithGoogle, signOutUser as fbSignOutUser, onAuthStateChange, FirebaseUser } from '../services/firebaseService';
+import { backupToFirestore, restoreFromFirestore, uploadGalleryToFirebaseStorage, restoreGalleryFromFirebaseStorage, uploadKnowledgeBaseToFirebaseStorage, restoreKnowledgeBaseFromFirebaseStorage, uploadChatHistoryToFirebaseStorage, restoreChatHistoryFromFirebaseStorage, signInWithGoogle as fbSignInWithGoogle, signOutUser as fbSignOutUser, onAuthStateChange, FirebaseUser } from '../services/firebaseService';
 import { AIProfile, UserProfile, ChatMessage, GalleryItem, JournalEntry, Memory, KnowledgeBaseDocument, ChatSession, ProactiveCommunication } from '../types';
 import { memoryService } from '../services/MemoryService';
 
@@ -106,9 +106,15 @@ interface AppContextType extends AppState {
   lastCloudSyncTime: number | null;
   lastFirebaseBackupTime: number | null;
   lastGalleryBackupTime: number | null;
+  lastKBBackupTime: number | null;
+  lastAutoJsonBackupTime: number | null;
   setLastCloudSyncTime: (t: number | null) => void;
   setLastFirebaseBackupTime: (t: number | null) => void;
   setLastGalleryBackupTime: (t: number | null) => void;
+  setLastKBBackupTime: (t: number | null) => void;
+  setLastAutoJsonBackupTime: (t: number | null) => void;
+  restoreFromLocalAutoBackup: () => Promise<any | null>;
+  saveLocalAutoBackup: (data: any) => Promise<void>;
   setAnthropicApiKey: (key: string | null) => void;
   showTutorial: boolean;
   setShowTutorial: (show: boolean) => void;
@@ -134,6 +140,10 @@ interface AppContextType extends AppState {
   firebaseGalleryRestore: (onProgress?: (done: number, total: number) => void) => Promise<number>;
   firebaseKBBackup: (onProgress?: (done: number, total: number) => void) => Promise<number>;
   firebaseKBRestore: (onProgress?: (done: number, total: number) => void) => Promise<number>;
+  firebaseChatBackup: (sessions: ChatSession[], activeSessionId: string | null) => Promise<number>;
+  firebaseChatRestore: () => Promise<number>;
+  lastChatBackupTime: number | null;
+  setLastChatBackupTime: (t: number | null) => void;
   realTimeSyncEnabled: boolean;
   setRealTimeSyncEnabled: (enabled: boolean) => void;
   autoBackupSchedule: 'off' | 'daily' | 'weekly';
@@ -441,6 +451,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [lastCloudSyncTime,      setLastCloudSyncTimeState]      = useState<number | null>(null);
   const [lastFirebaseBackupTime, setLastFirebaseBackupTimeState] = useState<number | null>(null);
   const [lastGalleryBackupTime,  setLastGalleryBackupTimeState]  = useState<number | null>(null);
+  const [lastKBBackupTime,       setLastKBBackupTimeState]       = useState<number | null>(null);
+  const [lastChatBackupTime,     setLastChatBackupTimeState]     = useState<number | null>(null);
+  const [lastAutoJsonBackupTime, setLastAutoJsonBackupTimeState] = useState<number | null>(null);
   const [autoBackupSchedule,     setAutoBackupScheduleState]     = useState<'off' | 'daily' | 'weekly'>('off');
   const [realTimeSyncEnabled,    setRealTimeSyncEnabledState]    = useState(false);
   const [anthropicApiKey, setAnthropicApiKeyState] = useState<string | null>(null);
@@ -994,6 +1007,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 setLastCloudSyncTimeState(savedData.lastCloudSyncTime || null);
                 setLastFirebaseBackupTimeState(savedData.lastFirebaseBackupTime || null);
                 setLastGalleryBackupTimeState(savedData.lastGalleryBackupTime || null);
+                setLastKBBackupTimeState(savedData.lastKBBackupTime || null);
+                setLastChatBackupTimeState(savedData.lastChatBackupTime || null);
+                setLastAutoJsonBackupTimeState(savedData.lastAutoJsonBackupTime || null);
                 setAutoBackupScheduleState(savedData.autoBackupSchedule || 'off');
                 setRealTimeSyncEnabledState(savedData.realTimeSyncEnabled ?? false);
                 setFirebaseApiKey(savedData.firebaseApiKey || null);
@@ -1816,6 +1832,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }).catch(() => {});
   };
 
+  const setLastKBBackupTime = (t: number | null) => {
+    setLastKBBackupTimeState(t);
+    loadFromDB('indigo_app_data_core').then((core: any) => {
+      if (core) saveToDB('indigo_app_data_core', { ...core, lastKBBackupTime: t });
+    }).catch(() => {});
+  };
+
+  const setLastChatBackupTime = (t: number | null) => {
+    setLastChatBackupTimeState(t);
+    loadFromDB('indigo_app_data_core').then((core: any) => {
+      if (core) saveToDB('indigo_app_data_core', { ...core, lastChatBackupTime: t });
+    }).catch(() => {});
+  };
+
+  const setLastAutoJsonBackupTime = (t: number | null) => {
+    setLastAutoJsonBackupTimeState(t);
+    loadFromDB('indigo_app_data_core').then((core: any) => {
+      if (core) saveToDB('indigo_app_data_core', { ...core, lastAutoJsonBackupTime: t });
+    }).catch(() => {});
+  };
+
   const setAutoBackupSchedule = (s: 'off' | 'daily' | 'weekly') => {
     setAutoBackupScheduleState(s);
     loadFromDB('indigo_app_data_core').then((core: any) => {
@@ -1948,6 +1985,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       added++;
     }
     return added;
+  };
+
+  // Chat history/sessions live in ChatContext, not here — the caller (the
+  // Settings screen, which has both useApp() and useChat()) passes the
+  // current sessions in directly, the same way exportData() already does.
+  const firebaseChatBackup = async (sessions: ChatSession[], activeSessionId: string | null): Promise<number> => {
+    if (!userId) throw new Error("Set a User ID in Cloud Sync settings before backing up chat history.");
+    return uploadChatHistoryToFirebaseStorage(userId, sessions, activeSessionId, firebaseRuntimeConfig);
+  };
+
+  const firebaseChatRestore = async (): Promise<number> => {
+    if (!userId) throw new Error("Set a User ID in Cloud Sync settings before restoring chat history.");
+    const restored = await restoreChatHistoryFromFirebaseStorage(userId, firebaseRuntimeConfig);
+    if (!restored) return 0;
+    await memoryService.restoreSessions(restored.sessions, restored.activeSessionId);
+    return restored.sessions.length;
   };
 
   const setFcmToken = (token: string | null) => {
@@ -2377,6 +2430,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (core) saveToDB('indigo_app_data_core', { ...core, autoJsonBackupInterval: interval });
     }).catch(() => {});
   };
+
+  // ── Auto JSON Backup ──────────────────────────────────────────────────────────
+  // A rolling local snapshot of everything exportData() produces — including
+  // chat history, sessions, and knowledge base, none of which the Firestore
+  // backup carries (Firestore has a 1 MiB document limit; full conversation
+  // history and knowledge base files can both exceed that easily). This is
+  // the actual timer-driven implementation; the runner that calls this on a
+  // schedule lives in AutoJsonBackupRunner.tsx because it needs chat/session
+  // data from ChatContext, which — being a child of AppProvider — isn't
+  // reachable from in here.
+  const saveLocalAutoBackup = React.useCallback(async (data: any) => {
+    try {
+      await saveToDB('indigo_app_data_auto_json_backup', { data, savedAt: Date.now() });
+      const ts = Date.now();
+      setLastAutoJsonBackupTime(ts);
+    } catch (e) {
+      console.error('Auto JSON backup failed to save:', e);
+      throw e;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const restoreFromLocalAutoBackup = async (): Promise<any | null> => {
+    try {
+      const record = await loadFromDB('indigo_app_data_auto_json_backup');
+      if (!record) return null;
+      return (record as any).data ?? null;
+    } catch (e) {
+      console.error('Failed to read local auto backup:', e);
+      return null;
+    }
+  };
   const setNotificationsEnabled = (enabled: boolean) => setNotificationsEnabledState(enabled);
   const setIsDebuggerEnabled = (enabled: boolean) => {
     console.log(`setIsDebuggerEnabled called with: ${enabled}`);
@@ -2468,6 +2553,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       firebaseAppId, firebaseMessagingSenderId, setFirebaseConfig,
       lastCloudSyncTime, lastFirebaseBackupTime, lastGalleryBackupTime,
       setLastCloudSyncTime, setLastFirebaseBackupTime, setLastGalleryBackupTime,
+      lastKBBackupTime, setLastKBBackupTime,
+      lastChatBackupTime, setLastChatBackupTime,
+      firebaseChatBackup, firebaseChatRestore,
+      lastAutoJsonBackupTime, setLastAutoJsonBackupTime,
+      restoreFromLocalAutoBackup, saveLocalAutoBackup,
       anthropicApiKey, setAnthropicApiKey,
       elevenLabsApiKey, setElevenLabsApiKey,
       geminiApiKey, setGeminiApiKey,
