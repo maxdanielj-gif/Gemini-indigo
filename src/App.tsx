@@ -20,6 +20,7 @@ import MapScreen from './screens/MapScreen';
 import LoginScreen, { SKIP_AUTH_KEY } from './screens/LoginScreen';
 import ErrorBoundary from './components/ErrorBoundary';
 import MobileDebugger from './components/MobileDebugger';
+import AutoJsonBackupRunner from './components/AutoJsonBackupRunner';
 
 const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { currentUser, authLoading, firebaseApiKey } = useApp();
@@ -74,6 +75,7 @@ const App: React.FC = () => {
     <ErrorBoundary>
       <AppProvider>
         <ChatProvider>
+          <AutoJsonBackupRunner />
           <AuthGate>
             <Router>
               <Layout>
