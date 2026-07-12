@@ -20,7 +20,7 @@ const SettingsScreen: React.FC = () => {
     resetApp, aiProfile, userProfile,
     notificationsEnabled, setNotificationsEnabled,
     fcmToken, setFcmToken,
-    exportData, addToast, reloadGallery,
+    exportData, addToast, reloadGallery, resolveProfileImagesFromGallery,
     showTimestamps, setShowTimestamps,
     timeZone, setTimeZone,
     userId, setUserId,
@@ -201,6 +201,10 @@ const SettingsScreen: React.FC = () => {
       }
       // Restore all app data directly into local state
       importData(JSON.stringify(backup), setChatHistory, setSessions, setActiveSessionId);
+      // Profiles may carry a referenceImageGalleryId pointing at a Gallery
+      // item that's already on this device (or gets restored via Full
+      // Restore / Gallery restore below) — fill the photo back in if so.
+      await resolveProfileImagesFromGallery();
       addToast({ title: 'Restore complete', message: 'App data restored from Firebase. Gallery images can be restored using Full Restore below.', type: 'success' });
     } catch (e: any) {
       addToast({ title: 'Restore failed', message: e.message || 'Could not reach Firebase.', type: 'error' });
@@ -336,6 +340,7 @@ const SettingsScreen: React.FC = () => {
       // importData applies ALL state: AI profile, personas, chat history, sessions,
       // journal, memories, knowledge base, user profile, and settings
       importData(JSON.stringify(rawData), setChatHistory, setSessions, setActiveSessionId);
+      await resolveProfileImagesFromGallery(); // covers photos already in the local gallery
 
       // Step 2: Restore gallery images from Google Drive (streamed to disk)
       let galleryMsg = '';
@@ -344,6 +349,7 @@ const SettingsScreen: React.FC = () => {
         if (res) {
           setFullRestoreStep('Step 2 / 2 — Refreshing gallery…');
           await reloadGallery();
+          await resolveProfileImagesFromGallery();
           galleryMsg = res.added > 0 ? ` ${res.added} gallery image(s) restored from Google Drive.` : ' Gallery already up to date.';
         } else {
           galleryMsg = ' No gallery backup found in Google Drive.';
@@ -377,6 +383,9 @@ const SettingsScreen: React.FC = () => {
       }
       setGalleryRestoreStep('Refreshing gallery…');
       await reloadGallery();
+      // If any persona/user photo was waiting on a gallery item that just
+      // came back from this restore, reattach it now.
+      await resolveProfileImagesFromGallery();
       addToast({
         title: 'Gallery restored',
         message: res.added > 0
