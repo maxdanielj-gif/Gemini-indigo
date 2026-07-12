@@ -1577,17 +1577,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateGalleryItem = (id: string, updates: Partial<GalleryItem>) => {
-    setGallery(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
-    // For items whose image data lives only on disk, the save effect
-    // deliberately never writes them — so metadata changes (persona
-    // reassignment, prompt edits) must be merged into the stored copy here.
     const target = gallery.find(item => item.id === id) as any;
-    if (target && (target.onDisk || target.oversized)) {
-      loadFromDB(`indigo_app_data_gallery_item_${id}`).then((itemStr: any) => {
-        if (!itemStr) return;
-        const parsed = typeof itemStr === 'string' ? JSON.parse(itemStr) : itemStr;
-        return saveToDB(`indigo_app_data_gallery_item_${id}`, JSON.stringify({ ...parsed, ...updates }));
-      }).catch(e => console.error('Failed to write gallery item update to disk:', e));
+    const isOnDisk = !!(target && (target.onDisk || target.oversized));
+
+    setGallery(prev => prev.map(item => {
+      if (item.id !== id) return item;
+      const anyItem = item as any;
+      if ((anyItem.onDisk || anyItem.oversized) && 'url' in updates) {
+        // These items are placeholders on purpose (their real image data
+        // lives only on disk, never in memory). Letting a real url slip into
+        // this state object — which is exactly what used to happen here —
+        // silently broke persistence for it forever afterward: the gallery
+        // save effect treats onDisk/oversized items as "already correct on
+        // disk, nothing to do" and permanently skips writing them, so an
+        // updated photo would look right on screen for the rest of this
+        // session but the stale old image would still be what's actually on
+        // disk — and therefore all that ever gets backed up or survives a
+        // reload. Keep the placeholder empty; the disk write below is the
+        // only place this update's url actually gets persisted.
+        const { url, ...metaUpdates } = updates as any;
+        return { ...item, ...metaUpdates };
+      }
+      return { ...item, ...updates };
+    }));
+
+    // For items whose image data lives only on disk, the save effect above
+    // deliberately never writes them — so both metadata AND content changes
+    // (persona reassignment, prompt edits, or a replaced photo) must be
+    // merged into the stored copy directly, here.
+    if (isOnDisk) {
+      (async () => {
+        try {
+          const itemStr = await loadFromDB(`indigo_app_data_gallery_item_${id}`);
+          // Self-heal: if the disk copy is missing for any reason (a prior
+          // failed write, an interrupted restore, etc.), don't silently do
+          // nothing — that's what let this go unnoticed indefinitely.
+          // Reconstruct from what we know and write it, rather than losing
+          // the update.
+          const parsed = itemStr
+            ? (typeof itemStr === 'string' ? JSON.parse(itemStr) : itemStr)
+            : { id, ...target };
+          await saveToDB(`indigo_app_data_gallery_item_${id}`, JSON.stringify({ ...parsed, ...updates }));
+          // Drop any cached url for this item so the next read reflects the change.
+          galleryUrlCacheRef.current.delete(id);
+        } catch (e) {
+          console.error('Failed to write gallery item update to disk:', e);
+        }
+      })();
     }
     saveData();
   };
