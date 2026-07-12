@@ -75,6 +75,7 @@ interface AppContextType extends AppState {
   setSyncFrequency: (frequency: number) => void;
   setFcmToken: (token: string | null) => void;
   addToGallery: (item: GalleryItem) => void;
+  addMultipleToGallery: (items: GalleryItem[]) => void;
   deleteImageFromGallery: (id: string) => void;
   deleteImagesFromGallery: (ids: string[]) => void;
   updateGalleryItem: (id: string, updates: Partial<GalleryItem>) => void;
@@ -258,6 +259,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [gallery, setGallery] = useState<GalleryItem[]>([]);
   const [galleryLoaded, setGalleryLoaded] = useState(false);
+  // Tracks which gallery items have already been persisted to IndexedDB (by
+  // reference) so the save effect further below only writes items that are
+  // actually new or changed, instead of re-writing the entire gallery every
+  // time the array changes. See loadGallery() and the gallery save effect.
+  const savedGalleryItemsRef = React.useRef<Map<string, GalleryItem>>(new Map());
 
   // Items whose base64 data exceeds this are kept out of memory. This is
   // deliberately generous — normal AI-generated images and reasonably-sized
@@ -310,6 +316,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
     }
     setGallery(galleryData);
+    // Mark everything just loaded from disk as already "saved" so that simply
+    // viewing the gallery (which triggers this load) doesn't cause the save
+    // effect below to immediately re-write every image back to IndexedDB —
+    // it should only write items that are actually new or changed.
+    const loadedMap = new Map<string, GalleryItem>();
+    for (const item of galleryData) loadedMap.set(item.id, item);
+    savedGalleryItemsRef.current = loadedMap;
     setGalleryLoaded(true);
     console.log("Gallery items loaded lazily", Date.now());
   };
@@ -1028,12 +1041,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // ── Gallery save — completely separate from saveData to avoid hook ordering issues.
   // Only runs when galleryLoaded is true, so it never overwrites with an empty list.
+  // Tracks which items were already written to IndexedDB (via savedGalleryItemsRef,
+  // declared above) so that adding N images (e.g. during a restore) does not
+  // re-serialize and re-write every previously-saved image on every single gallery
+  // state change — that O(n^2) behavior was heavy enough on large base64 images to
+  // crash the tab on phones.
   useEffect(() => {
     if (!galleryLoaded) return; // Never save until gallery has been fully loaded from DB
     const saveGallery = async () => {
       try {
         const galleryIds = gallery.map(item => item.id);
         await saveToDB('indigo_app_data_gallery_ids', galleryIds);
+        const previouslySaved = savedGalleryItemsRef.current;
+        const nowSaved = new Map<string, GalleryItem>();
         for (const item of gallery) {
           if (item.oversized) {
             // The full data for this item is already on disk and was never
@@ -1041,10 +1061,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             // has an intentionally empty url) would destroy it — so leave
             // the stored copy completely untouched. Its id remains in
             // galleryIds, which protects it from the cleanup pass below.
+            nowSaved.set(item.id, item);
             continue;
           }
-          await saveToDB(`indigo_app_data_gallery_item_${item.id}`, JSON.stringify(item));
+          // Only write to IndexedDB if this exact item wasn't already persisted
+          // (new item, or an existing item whose reference changed, e.g. edited).
+          if (previouslySaved.get(item.id) !== item) {
+            await saveToDB(`indigo_app_data_gallery_item_${item.id}`, JSON.stringify(item));
+          }
+          nowSaved.set(item.id, item);
         }
+        savedGalleryItemsRef.current = nowSaved;
         // Clean up items that were deleted
         const existingIds: string[] = (await loadFromDB('indigo_app_data_gallery_ids')) || [];
         for (const id of existingIds) {
@@ -1358,6 +1385,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [saveData, aiProfile.id, realTimeSyncEnabled, userId, firebaseApiKey, firebaseProjectId, firebaseAppId, firebaseStorageBucket]);
 
+  // Batched version of addToGallery — adds many items in a single state update
+  // instead of one setGallery() call per item. This matters a lot for restores:
+  // calling addToGallery() in a loop for, say, 60 images causes 60 separate
+  // gallery-array updates, and the IndexedDB save effect below re-persists the
+  // *entire* gallery (all base64 image data) on every single one of those
+  // updates — turning an O(n) restore into an O(n^2) memory/IO storm that can
+  // crash the browser tab on phones. Adding everything at once avoids that.
+  const addMultipleToGallery = React.useCallback((items: GalleryItem[]) => {
+    if (items.length === 0) return;
+    const stamped = items.map(item => ({ ...item, personaId: item.personaId ?? aiProfile.id }));
+    setGallery(prev => [...stamped, ...prev]);
+    saveData();
+    if (realTimeSyncEnabled && userId?.trim() && firebaseApiKey && firebaseProjectId && firebaseAppId && firebaseStorageBucket) {
+      const rtConfig = { apiKey: firebaseApiKey, projectId: firebaseProjectId, appId: firebaseAppId, storageBucket: firebaseStorageBucket };
+      uploadGalleryToFirebaseStorage(userId, stamped, rtConfig).catch(e => {
+        console.error('Real-time gallery upload failed:', e);
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saveData, aiProfile.id, realTimeSyncEnabled, userId, firebaseApiKey, firebaseProjectId, firebaseAppId, firebaseStorageBucket]);
+
   const deleteImageFromGallery = (id: string) => {
     setGallery(prev => prev.filter(item => item.id !== id));
     saveData();
@@ -1562,16 +1610,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const firebaseGalleryRestore = async (onProgress?: (done: number, total: number) => void): Promise<number> => {
     if (!userId) throw new Error("Set a User ID in Cloud Sync settings before restoring the gallery.");
     const restored = await restoreGalleryFromFirebaseStorage(userId, firebaseRuntimeConfig, onProgress);
-    // Add each restored image to the local gallery (skip if already present by id)
+    // Add all restored images to the local gallery in one batched update (skip
+    // any already present by id) instead of one-at-a-time, which previously
+    // caused the entire gallery to be re-saved to IndexedDB after every single
+    // image — an O(n^2) memory/IO spike that could crash the tab on phones.
     const existingIds = new Set(gallery.map((g: any) => g.id));
-    let added = 0;
-    for (const item of restored) {
-      if (!existingIds.has(item.id)) {
-        addToGallery({ id: item.id, url: item.url, prompt: item.prompt || '', provider: item.provider || 'Firebase Storage', createdAt: Date.now() } as any);
-        added++;
-      }
-    }
-    return added;
+    const toAdd = restored
+      .filter(item => !existingIds.has(item.id))
+      .map(item => ({ id: item.id, url: item.url, prompt: item.prompt || '', provider: item.provider || 'Firebase Storage', createdAt: Date.now() } as any));
+    addMultipleToGallery(toAdd);
+    return toAdd.length;
   };
 
   const firebaseKBBackup = async (onProgress?: (done: number, total: number) => void): Promise<number> => {
@@ -2042,7 +2090,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       aiProfile, setAIProfile, savePersona, deletePersona, loadPersona,
       savedPersonas, galleryLoaded, loadGallery,
       userProfile, setUserProfile, setUserReferenceImage,
-      gallery, addToGallery, deleteImageFromGallery, deleteImagesFromGallery, updateGalleryItem,
+      gallery, addToGallery, addMultipleToGallery, deleteImageFromGallery, deleteImagesFromGallery, updateGalleryItem,
       journal, addJournalEntry, updateJournalEntry, deleteJournalEntry,
       knowledgeBase,
       personaKnowledgeBase: knowledgeBase.filter(doc =>
