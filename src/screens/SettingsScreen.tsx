@@ -5,7 +5,7 @@ import { useChat } from '../context/ChatContext';
 import { requestNotificationPermission } from '../services/webPushService';
 import { processFile } from '../services/ocrService';
 import { Download, Upload, Trash2, Bell, FileText, Key, Save, Database, Smartphone, Cloud, RefreshCw, Clock, Shield, Edit2, LogOut, User, AlertCircle } from 'lucide-react';
-import { driveBackupGallery, driveRestoreGallery, driveSignOut, GalleryBackupItem } from '../services/googleDriveService';
+import { driveBackupGallery, driveRestoreGallery, driveSignOut, GalleryBackupItem, driveBackupKnowledgeBase, driveRestoreKnowledgeBase, driveBackupChatHistory, driveRestoreChatHistory } from '../services/googleDriveService';
 import { saveToDB, loadFromDB } from '../services/db';
 
 const SettingsScreen: React.FC = () => {
@@ -30,8 +30,7 @@ const SettingsScreen: React.FC = () => {
     updateAIProfile,
     isDebuggerEnabled, setIsDebuggerEnabled,
     firebaseBackup, firebaseRestore,
-    firebaseKBBackup, firebaseKBRestore,
-    firebaseChatBackup, firebaseChatRestore,
+    applyRestoredSessions,
     lastChatBackupTime, setLastChatBackupTime,
     wavespeedApiKey, setWavespeedApiKey,
     firebaseApiKey, firebaseAuthDomain, firebaseProjectId,
@@ -368,22 +367,30 @@ const SettingsScreen: React.FC = () => {
         galleryMsg = ' (Gallery restore skipped: ' + (galleryErr.message || 'unknown error') + ')';
       }
 
-      // Step 3: Restore chat history from Firebase Storage
+      // Step 3: Restore chat history from Google Drive
       setFullRestoreStep('Step 3 / 4 — Restoring chat history…');
       let chatMsg = '';
       try {
-        const chatCount = await firebaseChatRestore();
-        chatMsg = chatCount > 0 ? ` ${chatCount} chat session(s) restored.` : ' No chat history backup found.';
+        const restoredChat = await driveRestoreChatHistory();
+        if (restoredChat) {
+          await applyRestoredSessions(restoredChat.sessions, restoredChat.activeSessionId);
+          chatMsg = ` ${restoredChat.sessions.length} chat session(s) restored.`;
+        } else {
+          chatMsg = ' No chat history backup found.';
+        }
       } catch (chatErr: any) {
         chatMsg = ' (Chat history restore skipped: ' + (chatErr.message || 'unknown error') + ')';
       }
 
-      // Step 4: Restore knowledge base from Firebase Storage
+      // Step 4: Restore knowledge base from Google Drive
       setFullRestoreStep('Step 4 / 4 — Restoring knowledge base…');
       let kbMsg = '';
       try {
-        const kbCount = await firebaseKBRestore();
-        kbMsg = kbCount > 0 ? ` ${kbCount} knowledge base file(s) restored.` : '';
+        const restoredKB = await driveRestoreKnowledgeBase();
+        if (restoredKB) {
+          for (const file of restoredKB) addToKnowledgeBase({ name: file.name, content: file.content });
+          kbMsg = restoredKB.length > 0 ? ` ${restoredKB.length} knowledge base file(s) restored.` : '';
+        }
       } catch (kbErr: any) {
         kbMsg = ' (Knowledge base restore skipped: ' + (kbErr.message || 'unknown error') + ')';
       }
@@ -431,20 +438,17 @@ const SettingsScreen: React.FC = () => {
     }
   };
 
-  // ── Knowledge Base — Firebase Storage ──────────────────────────────────────
-  // firebaseKBBackup/firebaseKBRestore already existed (uploadKnowledgeBaseToFirebaseStorage
-  // / restoreKnowledgeBaseFromFirebaseStorage in firebaseService.ts) but had no
-  // UI to trigger them — knowledge base was never actually backed up anywhere.
+  // ── Knowledge Base — Google Drive ────────────────────────────────────────────
+  // Was Firebase Storage-based, but Cloud Storage now requires a Firebase
+  // project to be on the paid Blaze plan — even for a couple of small text
+  // files. Drive's API has no such requirement, and it's already set up for
+  // gallery backup, so knowledge base rides the same free path.
   const handleKBBackup = async () => {
-    if (!fbConfigReady) {
-      addToast({ title: 'Firebase not configured', message: 'Fill in API Key, Project ID and App ID in Firebase Configuration and save first.', type: 'error' });
-      return;
-    }
     setIsKBBackingUp(true);
     try {
-      const count = await firebaseKBBackup();
+      const count = await driveBackupKnowledgeBase(knowledgeBase);
       setLastKBBackupTime(Date.now());
-      addToast({ title: 'Knowledge base backed up', message: `${count} file(s) saved to Firebase Storage.`, type: 'success' });
+      addToast({ title: 'Knowledge base backed up', message: `${count} file(s) saved to Google Drive.`, type: 'success' });
     } catch (e: any) {
       addToast({ title: 'Backup failed', message: e.message || 'Could not back up knowledge base.', type: 'error' });
     } finally {
@@ -455,10 +459,19 @@ const SettingsScreen: React.FC = () => {
   const handleKBRestore = async () => {
     setIsKBRestoring(true);
     try {
-      const count = await firebaseKBRestore();
+      const files = await driveRestoreKnowledgeBase();
+      if (!files) {
+        addToast({ title: 'No backup found', message: 'No knowledge base backup was found in your Google Drive.', type: 'warning' });
+        return;
+      }
+      let added = 0;
+      for (const file of files) {
+        addToKnowledgeBase({ name: file.name, content: file.content });
+        added++;
+      }
       addToast({
         title: 'Knowledge base restored',
-        message: count > 0 ? `${count} file(s) restored.` : 'No new files to restore — already up to date.',
+        message: added > 0 ? `${added} file(s) restored.` : 'No files in the backup.',
         type: 'success',
       });
     } catch (e: any) {
@@ -468,20 +481,13 @@ const SettingsScreen: React.FC = () => {
     }
   };
 
-  // ── Chat History — Firebase Storage ─────────────────────────────────────────
-  // Same reasoning as knowledge base: full conversation history doesn't fit
-  // Firestore's 1 MiB document limit, so it was never included in the
-  // Firestore backup and had no cloud backup path of its own until now.
+  // ── Chat History — Google Drive ──────────────────────────────────────────────
   const handleChatBackup = async () => {
-    if (!fbConfigReady) {
-      addToast({ title: 'Firebase not configured', message: 'Fill in API Key, Project ID and App ID in Firebase Configuration and save first.', type: 'error' });
-      return;
-    }
     setIsChatBackingUp(true);
     try {
-      const count = await firebaseChatBackup(sessions, activeSessionId);
+      const count = await driveBackupChatHistory(sessions, activeSessionId);
       setLastChatBackupTime(Date.now());
-      addToast({ title: 'Chat history backed up', message: `${count} session(s) saved to Firebase Storage.`, type: 'success' });
+      addToast({ title: 'Chat history backed up', message: `${count} session(s) saved to Google Drive.`, type: 'success' });
     } catch (e: any) {
       addToast({ title: 'Backup failed', message: e.message || 'Could not back up chat history.', type: 'error' });
     } finally {
@@ -492,12 +498,13 @@ const SettingsScreen: React.FC = () => {
   const handleChatRestore = async () => {
     setIsChatRestoring(true);
     try {
-      const count = await firebaseChatRestore();
-      if (count === 0) {
-        addToast({ title: 'No backup found', message: 'No chat history backup was found for this user ID.', type: 'warning' });
+      const restored = await driveRestoreChatHistory();
+      if (!restored) {
+        addToast({ title: 'No backup found', message: 'No chat history backup was found in your Google Drive.', type: 'warning' });
         return;
       }
-      addToast({ title: 'Chat history restored', message: `${count} session(s) restored.`, type: 'success' });
+      await applyRestoredSessions(restored.sessions, restored.activeSessionId);
+      addToast({ title: 'Chat history restored', message: `${restored.sessions.length} session(s) restored.`, type: 'success' });
     } catch (e: any) {
       addToast({ title: 'Restore failed', message: e.message || 'Could not restore chat history.', type: 'error' });
     } finally {
@@ -1033,9 +1040,9 @@ const SettingsScreen: React.FC = () => {
 
               {/* Knowledge Base — Firebase Storage */}
               <div className="border-t border-indigo-100 dark:border-indigo-800 pt-3">
-                <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300 mb-1">Knowledge Base (Firebase Storage)</p>
+                <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300 mb-1">Knowledge Base (Google Drive)</p>
                 <p className="text-xs text-indigo-500 dark:text-indigo-400 mb-2">
-                  Knowledge base files aren't included in the Firestore backup above (they don't fit its size limit) — back them up here instead.
+                  Knowledge base files aren't included in the Firestore backup above (they don't fit its size limit), and Firebase Storage now requires a paid plan — this uses the same free Google Drive backup as your gallery instead.
                   {knowledgeBase.length > 0
                     ? ` You have ${knowledgeBase.length} file(s) locally.`
                     : ' No knowledge base files on this device yet.'}
@@ -1044,7 +1051,7 @@ const SettingsScreen: React.FC = () => {
                   <div>
                     <button
                       onClick={handleKBBackup}
-                      disabled={isKBBackingUp || !fbConfigReady || knowledgeBase.length === 0}
+                      disabled={isKBBackingUp || knowledgeBase.length === 0}
                       className="w-full py-2.5 bg-indigo-500 text-white rounded-xl font-medium hover:bg-indigo-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-2 text-sm">
                       {isKBBackingUp ? (
                         <>
@@ -1062,7 +1069,7 @@ const SettingsScreen: React.FC = () => {
                   <div>
                     <button
                       onClick={handleKBRestore}
-                      disabled={isKBRestoring || !fbConfigReady}
+                      disabled={isKBRestoring}
                       className="w-full py-2.5 bg-white dark:bg-indigo-900 border border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 rounded-xl font-medium hover:bg-indigo-50 dark:hover:bg-indigo-800 transition-colors disabled:opacity-50 flex items-center justify-center gap-2 text-sm">
                       {isKBRestoring ? (
                         <>
@@ -1078,9 +1085,9 @@ const SettingsScreen: React.FC = () => {
 
               {/* Chat History — Firebase Storage */}
               <div className="border-t border-indigo-100 dark:border-indigo-800 pt-3">
-                <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300 mb-1">Chat History (Firebase Storage)</p>
+                <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300 mb-1">Chat History (Google Drive)</p>
                 <p className="text-xs text-indigo-500 dark:text-indigo-400 mb-2">
-                  Like the knowledge base, full conversation history doesn't fit the Firestore backup above — back it up here instead.
+                  Like the knowledge base, full conversation history doesn't fit the Firestore backup above — backed up to Google Drive instead, same as your gallery and knowledge base.
                   {sessions.length > 0
                     ? ` You have ${sessions.length} session(s) locally.`
                     : ' No chat sessions on this device yet.'}
@@ -1089,7 +1096,7 @@ const SettingsScreen: React.FC = () => {
                   <div>
                     <button
                       onClick={handleChatBackup}
-                      disabled={isChatBackingUp || !fbConfigReady || sessions.length === 0}
+                      disabled={isChatBackingUp || sessions.length === 0}
                       className="w-full py-2.5 bg-indigo-500 text-white rounded-xl font-medium hover:bg-indigo-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-2 text-sm">
                       {isChatBackingUp ? (
                         <>
@@ -1107,7 +1114,7 @@ const SettingsScreen: React.FC = () => {
                   <div>
                     <button
                       onClick={handleChatRestore}
-                      disabled={isChatRestoring || !fbConfigReady}
+                      disabled={isChatRestoring}
                       className="w-full py-2.5 bg-white dark:bg-indigo-900 border border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 rounded-xl font-medium hover:bg-indigo-50 dark:hover:bg-indigo-800 transition-colors disabled:opacity-50 flex items-center justify-center gap-2 text-sm">
                       {isChatRestoring ? (
                         <>
