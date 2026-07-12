@@ -3,7 +3,7 @@ import { gzipSync, strToU8, gunzipSync, strFromU8 } from 'fflate';
 import { saveToDB, loadFromDB, deleteFromDB, clearDB } from '../services/db';
 import { onForegroundMessage, requestNotificationPermission } from '../services/webPushService';
 import { showNativeNotification } from '../services/notificationService';
-import { backupToFirestore, restoreFromFirestore, uploadGalleryToFirebaseStorage, restoreGalleryFromFirebaseStorage, uploadKnowledgeBaseToFirebaseStorage, restoreKnowledgeBaseFromFirebaseStorage, signInWithGoogle as fbSignInWithGoogle, signOutUser as fbSignOutUser, onAuthStateChange, FirebaseUser } from '../services/firebaseService';
+import { backupToFirestore, restoreFromFirestore, uploadGalleryToFirebaseStorage, restoreGalleryFromFirebaseStorage, uploadKnowledgeBaseToFirebaseStorage, restoreKnowledgeBaseFromFirebaseStorage, uploadProfileImagesToFirebaseStorage, restoreProfileImagesFromFirebaseStorage, ProfileImageEntry, signInWithGoogle as fbSignInWithGoogle, signOutUser as fbSignOutUser, onAuthStateChange, FirebaseUser } from '../services/firebaseService';
 import { AIProfile, UserProfile, ChatMessage, GalleryItem, JournalEntry, Memory, KnowledgeBaseDocument, ChatSession, ProactiveCommunication } from '../types';
 import { memoryService } from '../services/MemoryService';
 
@@ -183,6 +183,24 @@ interface AppContextType extends AppState {
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
+
+// Gathers every profile photo (user + active persona + saved personas) as
+// key → data-URL entries for the Firebase Storage backup. The Firestore
+// document deliberately nulls these (1 MiB doc limit), so without this
+// companion upload profile photos were never backed up anywhere.
+const collectProfileImageEntries = (data: any): ProfileImageEntry[] => {
+  const byKey = new Map<string, string>();
+  const push = (key: string, img: any) => {
+    if (typeof img === 'string' && img.startsWith('data:')) byKey.set(key, img);
+  };
+  push('user_reference', data?.userProfile?.referenceImage);
+  if (data?.aiProfile?.id) push(`persona_${data.aiProfile.id}_reference`, data.aiProfile.referenceImage);
+  const personas = Array.isArray(data?.savedPersonas) ? data.savedPersonas : [];
+  for (const p of personas) {
+    if (p?.id) push(`persona_${p.id}_reference`, p.referenceImage);
+  }
+  return Array.from(byKey, ([key, dataUrl]) => ({ key, dataUrl }));
+};
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Initial States
@@ -1169,6 +1187,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           wavespeedApiKey,
           autoSaveChat, autoBackupSchedule,
         }, firebaseRuntimeConfig);
+        // Include profile photos (best-effort — never fail the whole auto-backup)
+        try {
+          const profileImages = collectProfileImageEntries({ aiProfile, savedPersonas, userProfile });
+          if (profileImages.length > 0 && firebaseStorageBucket) {
+            await uploadProfileImagesToFirebaseStorage(userId, profileImages, firebaseRuntimeConfig);
+          }
+        } catch (imgErr) {
+          console.error('Auto-backup: profile photo upload failed:', imgErr);
+        }
         const ts = Date.now();
         lastAutoBackupRef.current = ts;
         setLastFirebaseBackupTimeState(ts);
@@ -1587,11 +1614,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const firebaseBackup = async (dataToBackup: any) => {
     if (!userId) throw new Error("Set a User ID in Cloud Sync settings before backing up.");
     await backupToFirestore(userId, dataToBackup, firebaseRuntimeConfig);
+    // Profile photos ride alongside the Firestore doc as Storage files.
+    const profileImages = collectProfileImageEntries(dataToBackup);
+    if (profileImages.length > 0 && firebaseStorageBucket) {
+      try {
+        await uploadProfileImagesToFirebaseStorage(userId, profileImages, firebaseRuntimeConfig);
+      } catch (e: any) {
+        throw new Error(`App data was backed up, but profile photos could not be uploaded: ${e.message || e}`);
+      }
+    }
   };
 
   const firebaseRestore = async (): Promise<any | null> => {
     if (!userId) throw new Error("Set a User ID in Cloud Sync settings before restoring.");
-    return restoreFromFirestore(userId, firebaseRuntimeConfig);
+    const data = await restoreFromFirestore(userId, firebaseRuntimeConfig);
+    if (!data) return data;
+    // Reattach profile photos from Firebase Storage before the data is applied.
+    // Best-effort: backups made before profile photos were backed up have no
+    // manifest, and that must never block the rest of the restore.
+    try {
+      const images = await restoreProfileImagesFromFirebaseStorage(userId, firebaseRuntimeConfig);
+      if (Object.keys(images).length > 0) {
+        const withPhoto = (profile: any) => {
+          const url = profile?.id ? images[`persona_${profile.id}_reference`] : undefined;
+          return url ? { ...profile, referenceImage: url } : profile;
+        };
+        if (images['user_reference'] && data.userProfile) {
+          data.userProfile = { ...data.userProfile, referenceImage: images['user_reference'] };
+        }
+        if (data.aiProfile) data.aiProfile = withPhoto(data.aiProfile);
+        if (Array.isArray(data.savedPersonas)) data.savedPersonas = data.savedPersonas.map(withPhoto);
+      }
+    } catch (e) {
+      console.warn('Profile photo restore skipped:', e);
+    }
+    return data;
   };
 
   const firebaseGalleryBackup = async (onProgress?: (done: number, total: number) => void): Promise<number> => {
@@ -1902,12 +1959,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const parsed = JSON.parse(json);
       
       // 1. Restore AI Profile and Personas
-      const importedProfile = parsed.aiProfile || aiProfile;
+      // Firestore backups null out profile photos (1 MiB doc limit). Newer
+      // backups get photos re-attached from Firebase Storage before reaching
+      // this function, but for older backups: if the incoming profile has no
+      // photo and we already have one locally for the same persona, keep the
+      // local photo rather than wiping it (same principle as the gallery fix).
+      const localPhotoFor = (id?: string): string | null => {
+        if (!id) return null;
+        if (aiProfile.id === id && aiProfile.referenceImage) return aiProfile.referenceImage;
+        const match = savedPersonas.find(p => p.id === id);
+        return match?.referenceImage || null;
+      };
+      const withLocalPhoto = (profile: any) =>
+        profile && profile.referenceImage == null
+          ? { ...profile, referenceImage: localPhotoFor(profile.id) }
+          : profile;
+
+      const importedProfile = withLocalPhoto(parsed.aiProfile || aiProfile);
       setAIProfileState({
         ...importedProfile,
         imageGenerationInstructions: importedProfile.imageGenerationInstructions !== undefined ? importedProfile.imageGenerationInstructions : initialAIProfileState.imageGenerationInstructions
       });
-      setSavedPersonas(parsed.savedPersonas || [importedProfile]);
+      setSavedPersonas((parsed.savedPersonas || [importedProfile]).map(withLocalPhoto));
       
       // 2. Restore Chat Data — must go through memoryService (setSessions/setChatHistory are no-ops)
       const importedSessions = parsed.sessions || importedProfile.sessions || [];
@@ -1934,7 +2007,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
 
       // 3. Restore Other App State
-      setUserProfileState(parsed.userProfile || userProfile);
+      const importedUser = parsed.userProfile || userProfile;
+      setUserProfileState(
+        importedUser.referenceImage == null && userProfile.referenceImage
+          ? { ...importedUser, referenceImage: userProfile.referenceImage }
+          : importedUser
+      );
       // Only replace the gallery if the backup actually contains gallery items.
       // Firestore "Restore All" backups deliberately do NOT include the gallery
       // (it lives in its own Drive/Storage backup) — the old unconditional
