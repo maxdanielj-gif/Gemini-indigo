@@ -795,7 +795,14 @@ const AIProfileScreen: React.FC = () => {
     reader.onload = (event) => {
       try {
         const json = JSON.parse(event.target?.result as string);
-        if (!json.name || !json.personality) {
+        // Only check for what actually makes this a valid persona export:
+        // a name and an id. `personality` is a perfectly normal field to
+        // leave blank (many minimalist personas do), but the old check
+        // (`!json.personality`) treated an empty string the same as a
+        // missing field — rejecting every export of a persona with no
+        // personality text as "invalid", even though it exported and
+        // parsed just fine.
+        if (typeof json?.name !== 'string' || !json.name.trim() || typeof json?.id !== 'string' || !json.id) {
           addToast({ title: 'Invalid file', message: 'This file does not look like a valid persona export.', type: 'error' });
           return;
         }
