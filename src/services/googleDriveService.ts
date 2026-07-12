@@ -162,31 +162,202 @@ export async function driveBackupGallery(
 
 /**
  * Restores gallery images from Google Drive.
- * Returns the restored items array, or null if no backup found.
+ *
+ * The backup is a single JSON file that can contain the *entire* gallery as
+ * base64 — easily hundreds of MB. The old implementation downloaded the whole
+ * file into one giant string and JSON.parse()d it, which briefly holds 2-3
+ * copies of everything in memory and reliably crashes the tab on phones
+ * ("Aw, Snap!"). This version streams the download and peels one image object
+ * out of the JSON at a time, so peak memory is roughly ONE image, not the
+ * whole gallery.
+ *
+ * - If `onItem` is provided, each image is handed to it as soon as it has
+ *   been parsed and is then released; the function returns an empty array
+ *   (use your own counter in the callback). Returns null if no backup exists.
+ * - If `onItem` is omitted, behaves like before and returns the full array
+ *   (only safe for small galleries — prefer passing onItem).
  */
 export async function driveRestoreGallery(
   onProgress?: (step: string) => void,
+  onItem?: (item: GalleryBackupItem, index: number) => Promise<void> | void,
 ): Promise<GalleryBackupItem[] | null> {
   onProgress?.('Signing in to Google Drive…');
-  await getAccessToken();
+  const token = await getAccessToken();
 
   onProgress?.('Looking for backup…');
   const fileId = await findBackupFileId();
   if (!fileId) return null;
 
   onProgress?.('Downloading backup…');
-  // Use gapi client to read — avoids CORS issue with direct fetch of content
-  const resp = await (window as any).gapi.client.drive.files.get({
-    fileId,
-    alt: 'media',
-  });
 
-  const parsed = typeof resp.body === 'string' ? JSON.parse(resp.body) : resp.result;
-  if (!parsed?.items || !Array.isArray(parsed.items)) {
+  // Stream the file with fetch (gapi cannot stream — it buffers the entire
+  // response body as one string, which is exactly the memory bomb we're
+  // avoiding). If the streaming fetch fails for any reason, fall back to the
+  // old gapi whole-body path below so small galleries still restore.
+  let resp: Response | null = null;
+  try {
+    resp = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    resp = null;
+  }
+
+  if (!resp || !resp.ok || !resp.body) {
+    // Fallback: legacy non-streaming path (fine for small backups).
+    const legacy = await (window as any).gapi.client.drive.files.get({ fileId, alt: 'media' });
+    const parsed = typeof legacy.body === 'string' ? JSON.parse(legacy.body) : legacy.result;
+    if (!parsed?.items || !Array.isArray(parsed.items)) {
+      throw new Error('Backup file format not recognised.');
+    }
+    if (!onItem) return parsed.items as GalleryBackupItem[];
+    for (let i = 0; i < parsed.items.length; i++) await onItem(parsed.items[i], i);
+    return [];
+  }
+
+  // ── Incremental scan of {"version":..,"backedUpAt":..,"items":[ {..}, {..} ]}
+  // Tracks JSON string/escape state and brace depth so item boundaries are
+  // found correctly even when prompts contain braces, quotes, or "items".
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+
+  const collected: GalleryBackupItem[] = [];
+  let delivered = 0;
+
+  let buf = '';
+  let phase: 'seekItems' | 'seekColon' | 'seekBracket' | 'inArray' | 'done' = 'seekItems';
+  let depth = 0;            // current nesting depth ({ and [ increase, } and ] decrease)
+  let arrayDepth = 0;       // depth *inside* the items array
+  let inString = false;
+  let escape = false;
+  let expectingKey = false; // at depth 1: next string is an object key
+  let capturingKey = false;
+  let keyChars = '';
+  let itemStart = -1;       // index in buf where the current item's '{' sits
+  let pos = 0;              // scan position in buf — persists across chunks so
+                            // large items aren't re-scanned on every chunk
+
+  const deliver = async (raw: string) => {
+    let item: GalleryBackupItem;
+    try {
+      item = JSON.parse(raw);
+    } catch {
+      throw new Error('Backup file appears to be corrupted (an image entry could not be read).');
+    }
+    delivered++;
+    if (onItem) {
+      await onItem(item, delivered - 1);
+    } else {
+      collected.push(item);
+    }
+    onProgress?.(`Downloaded image ${delivered}…`);
+  };
+
+  streamLoop:
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+
+    while (pos < buf.length) {
+      const c = buf[pos];
+
+      if (inString) {
+        if (escape) { escape = false; }
+        else if (c === '\\') { escape = true; }
+        else if (c === '"') {
+          inString = false;
+          if (capturingKey) {
+            capturingKey = false;
+            if (phase === 'seekItems' && keyChars === 'items') phase = 'seekColon';
+          }
+        } else if (capturingKey) {
+          keyChars += c;
+        }
+        pos++;
+        continue;
+      }
+
+      switch (c) {
+        case '"':
+          inString = true;
+          if (phase === 'seekItems' && depth === 1 && expectingKey) {
+            capturingKey = true;
+            keyChars = '';
+          }
+          break;
+        case '{':
+          if (phase === 'seekBracket') phase = 'seekItems'; // "items" wasn't an array — keep looking
+          if (phase === 'inArray' && depth === arrayDepth && itemStart === -1) {
+            itemStart = pos;
+          }
+          depth++;
+          expectingKey = true;
+          break;
+        case '[':
+          if (phase === 'seekBracket') {
+            phase = 'inArray';
+            arrayDepth = depth + 1;
+          }
+          depth++;
+          break;
+        case '}':
+          depth--;
+          if (phase === 'inArray' && depth === arrayDepth && itemStart >= 0) {
+            await deliver(buf.slice(itemStart, pos + 1));
+            // Trim everything already consumed so buf never grows past
+            // (largest single item + one network chunk).
+            buf = buf.slice(pos + 1);
+            pos = -1; // will be ++'d to 0
+            itemStart = -1;
+          }
+          break;
+        case ']':
+          depth--;
+          if (phase === 'inArray' && depth === arrayDepth - 1) {
+            phase = 'done';
+            break streamLoop;
+          }
+          break;
+        case ':':
+          if (phase === 'seekColon') phase = 'seekBracket';
+          expectingKey = false;
+          break;
+        case ',':
+          expectingKey = true;
+          break;
+        default:
+          // Whitespace / numbers / literals — if we were mid-detection of the
+          // items key sequence and hit something unexpected, reset detection.
+          if ((phase === 'seekColon' || phase === 'seekBracket') && !/\s/.test(c)) {
+            phase = 'seekItems';
+          }
+          break;
+      }
+      pos++;
+    }
+
+    // Between items nothing before the current item start is ever needed again.
+    if (itemStart === -1) {
+      buf = '';
+      pos = 0;
+    } else if (itemStart > 0) {
+      buf = buf.slice(itemStart);
+      pos -= itemStart;
+      itemStart = 0;
+    }
+  }
+
+  try { reader.cancel(); } catch { /* stream may already be closed */ }
+
+  if (phase !== 'done') {
+    if (delivered > 0) {
+      throw new Error(`Backup download ended early — ${delivered} image(s) were restored before it stopped. Run restore again to retry.`);
+    }
     throw new Error('Backup file format not recognised.');
   }
 
-  return parsed.items as GalleryBackupItem[];
+  return onItem ? [] : collected;
 }
 
 /**
