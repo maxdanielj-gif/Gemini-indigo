@@ -268,16 +268,51 @@ const SettingsScreen: React.FC = () => {
     let added = 0;
     let skipped = 0;
 
+    // Keep the lightweight gallery index in step with what we write, so the
+    // next gallery open can read one small record instead of rescanning every
+    // item. If the existing index is already out of step, skip it — the next
+    // gallery load will rebuild it from scratch (self-heal).
+    const OVERSIZED_CHARS = 8 * 1024 * 1024; // matches OVERSIZED_ITEM_THRESHOLD_CHARS in AppContext
+    let metaIndex: any[] | null = null;
+    try {
+      const existingMeta = await loadFromDB('indigo_app_data_gallery_meta');
+      if (Array.isArray(existingMeta)) {
+        const metaIds = new Set(existingMeta.map((m: any) => m?.id));
+        if (metaIds.size === ids.length && ids.every(id => metaIds.has(id))) metaIndex = [...existingMeta];
+      } else if (ids.length === 0) {
+        metaIndex = [];
+      }
+    } catch { /* index self-heals on next gallery load */ }
+
     const result = await driveRestoreGallery(onStep, async (item) => {
       if (!item?.id || idSet.has(item.id)) { skipped++; return; }
       // Keep the same persona-stamping behavior the old restore had
       const stamped = { ...item, personaId: item.personaId ?? aiProfile.id };
-      await saveToDB(`indigo_app_data_gallery_item_${stamped.id}`, JSON.stringify(stamped));
+      const json = JSON.stringify(stamped);
+      await saveToDB(`indigo_app_data_gallery_item_${stamped.id}`, json);
       idSet.add(stamped.id);
       ids.push(stamped.id);
       // Update the id list after every image so a mid-restore interruption
       // never leaves saved images orphaned (orphans would be cleaned up/lost).
       await saveToDB('indigo_app_data_gallery_ids', ids);
+      if (metaIndex) {
+        const url = typeof stamped.url === 'string' ? stamped.url : '';
+        metaIndex.push({
+          id: stamped.id,
+          type: (stamped as any).type ?? 'generated',
+          mediaType: (stamped as any).mediaType ?? (url.startsWith('data:video/') ? 'video' : 'image'),
+          url: '',
+          prompt: stamped.prompt,
+          provider: (stamped as any).provider,
+          timestamp: (stamped as any).timestamp ?? Date.now(),
+          personaId: stamped.personaId,
+          onDisk: true,
+          ...(json.length > OVERSIZED_CHARS
+            ? { oversized: true, approxSizeMB: Math.round((json.length / 1024 / 1024) * 10) / 10 }
+            : {}),
+        });
+        await saveToDB('indigo_app_data_gallery_meta', metaIndex);
+      }
       added++;
       onStep(`Saved image ${added} to this device…`);
     });
