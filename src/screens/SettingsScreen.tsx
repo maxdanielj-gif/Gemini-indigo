@@ -6,6 +6,7 @@ import { requestNotificationPermission } from '../services/webPushService';
 import { processFile } from '../services/ocrService';
 import { Download, Upload, Trash2, Bell, FileText, Key, Save, Database, Smartphone, Cloud, RefreshCw, Clock, Shield, Edit2, LogOut, User, AlertCircle } from 'lucide-react';
 import { driveBackupGallery, driveRestoreGallery, driveSignOut, GalleryBackupItem } from '../services/googleDriveService';
+import { saveToDB, loadFromDB } from '../services/db';
 
 const SettingsScreen: React.FC = () => {
   const {
@@ -19,7 +20,7 @@ const SettingsScreen: React.FC = () => {
     resetApp, aiProfile, userProfile,
     notificationsEnabled, setNotificationsEnabled,
     fcmToken, setFcmToken,
-    exportData, addToast, addToGallery, addMultipleToGallery,
+    exportData, addToast, reloadGallery,
     showTimestamps, setShowTimestamps,
     timeZone, setTimeZone,
     userId, setUserId,
@@ -238,6 +239,39 @@ const SettingsScreen: React.FC = () => {
   };
 
   // ── Full restore: Firestore (all app data) + Storage (gallery images) ────────
+  // ── Streaming Drive gallery restore ─────────────────────────────────────────
+  // Each image is written straight to IndexedDB the moment it arrives and then
+  // released, so the phone never holds more than ~one image in memory at a
+  // time. (Restoring via React state meant the whole gallery — every base64
+  // string — sat in memory at once, which crashed the tab on Android.)
+  // Returns null if no backup was found in Drive.
+  const restoreDriveGalleryToDisk = async (
+    onStep: (step: string) => void,
+  ): Promise<{ added: number; skipped: number } | null> => {
+    const existingIds: string[] = (await loadFromDB('indigo_app_data_gallery_ids')) || [];
+    const idSet = new Set(existingIds);
+    const ids = [...existingIds];
+    let added = 0;
+    let skipped = 0;
+
+    const result = await driveRestoreGallery(onStep, async (item) => {
+      if (!item?.id || idSet.has(item.id)) { skipped++; return; }
+      // Keep the same persona-stamping behavior the old restore had
+      const stamped = { ...item, personaId: item.personaId ?? aiProfile.id };
+      await saveToDB(`indigo_app_data_gallery_item_${stamped.id}`, JSON.stringify(stamped));
+      idSet.add(stamped.id);
+      ids.push(stamped.id);
+      // Update the id list after every image so a mid-restore interruption
+      // never leaves saved images orphaned (orphans would be cleaned up/lost).
+      await saveToDB('indigo_app_data_gallery_ids', ids);
+      added++;
+      onStep(`Saved image ${added} to this device…`);
+    });
+
+    if (result === null) return null;
+    return { added, skipped };
+  };
+
   const handleFullFirebaseRestore = async () => {
     if (!fbConfigReady) {
       addToast({ title: 'Firebase not configured', message: 'Fill in API Key, Project ID and App ID in Firebase Configuration and save first.', type: 'error' });
@@ -254,30 +288,19 @@ const SettingsScreen: React.FC = () => {
       // journal, memories, knowledge base, user profile, and settings
       importData(JSON.stringify(rawData), setChatHistory, setSessions, setActiveSessionId);
 
-      // Step 2: Restore gallery images from Firebase Storage (if Storage bucket is set)
+      // Step 2: Restore gallery images from Google Drive (streamed to disk)
       let galleryMsg = '';
-      if (localFbStorageBucket) {
-        setFullRestoreStep('Step 2 / 2 — Downloading gallery images from Firebase Storage…');
-        try {
-          setFullRestoreStep('Step 2 / 2 — Downloading gallery from Google Drive…');
-          const items = await driveRestoreGallery((step) => setFullRestoreStep(`Step 2 / 2 — ${step}`));
-          if (items) {
-            // Batch this into a single gallery update instead of calling
-            // addToGallery() once per image — one-at-a-time additions each
-            // re-save the whole (growing) gallery to IndexedDB, which for a
-            // large restore can crash the tab on phones.
-            const toAdd = items.filter(item => !gallery.some((g: any) => g.id === item.id));
-            addMultipleToGallery(toAdd as any);
-            const added = toAdd.length;
-            galleryMsg = added > 0 ? ` ${added} gallery image(s) restored from Google Drive.` : ' Gallery already up to date.';
-          } else {
-            galleryMsg = ' No gallery backup found in Google Drive.';
-          }
-        } catch (galleryErr: any) {
-          galleryMsg = ' (Gallery restore skipped: ' + (galleryErr.message || 'unknown error') + ')';
+      try {
+        const res = await restoreDriveGalleryToDisk((step) => setFullRestoreStep(`Step 2 / 2 — ${step}`));
+        if (res) {
+          setFullRestoreStep('Step 2 / 2 — Refreshing gallery…');
+          await reloadGallery();
+          galleryMsg = res.added > 0 ? ` ${res.added} gallery image(s) restored from Google Drive.` : ' Gallery already up to date.';
+        } else {
+          galleryMsg = ' No gallery backup found in Google Drive.';
         }
-      } else {
-        galleryMsg = ' Gallery not restored (Storage Bucket not configured).';
+      } catch (galleryErr: any) {
+        galleryMsg = ' (Gallery restore skipped: ' + (galleryErr.message || 'unknown error') + ')';
       }
 
       addToast({
@@ -298,26 +321,22 @@ const SettingsScreen: React.FC = () => {
     setIsGalleryRestoring(true);
     setGalleryRestoreStep(null);
     try {
-      const items = await driveRestoreGallery((step) => setGalleryRestoreStep(step));
-      if (!items) {
+      const res = await restoreDriveGalleryToDisk((step) => setGalleryRestoreStep(step));
+      if (!res) {
         addToast({ title: 'No backup found', message: 'No gallery backup was found in your Google Drive.', type: 'warning' });
         return;
       }
-      let added = 0;
-      // Batch this into a single gallery update instead of calling
-      // addToGallery() once per image — see comment in handleFullFirebaseRestore.
-      const toAdd = items.filter(item => !gallery.some((g: any) => g.id === item.id));
-      addMultipleToGallery(toAdd as any);
-      added = toAdd.length;
+      setGalleryRestoreStep('Refreshing gallery…');
+      await reloadGallery();
       addToast({
         title: 'Gallery restored',
-        message: added > 0
-          ? `${added} image(s) restored from Google Drive.`
+        message: res.added > 0
+          ? `${res.added} image(s) restored from Google Drive.`
           : 'All backed-up images are already in your gallery.',
         type: 'success',
       });
     } catch (e: any) {
-      addToast({ title: 'Gallery restore failed', message: e.message || 'Could not restore gallery from Firebase.', type: 'error' });
+      addToast({ title: 'Gallery restore failed', message: e.message || 'Could not restore gallery from Google Drive.', type: 'error' });
     } finally {
       setIsGalleryRestoring(false);
       setGalleryRestoreProgress(null);
