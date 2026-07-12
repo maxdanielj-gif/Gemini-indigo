@@ -36,6 +36,65 @@ const PersonaPopover: React.FC<{
   );
 };
 
+// ── Lazy media thumbnail ──────────────────────────────────────────────────────
+// Gallery state holds metadata only — the actual base64 image/video data stays
+// in IndexedDB. Each tile loads its own data when it scrolls near the viewport
+// and RELEASES it when it scrolls away, so memory stays flat no matter how many
+// items the gallery holds. (Holding every image in memory at once is exactly
+// what crashed the tab on phones once the gallery grew.)
+const LazyThumb: React.FC<{
+    item: any;
+    mediaType: string;
+    getUrl: (id: string) => Promise<string | null>;
+}> = ({ item, mediaType, getUrl }) => {
+    const [src, setSrc] = useState<string | null>(item.url || null);
+    const holderRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        // Freshly created items (this session) still carry their url in memory.
+        if (item.url) { setSrc(item.url); return; }
+        const el = holderRef.current;
+        if (!el) return;
+        let cancelled = false;
+        const obs = new IntersectionObserver((entries) => {
+            for (const entry of entries) {
+                if (entry.isIntersecting) {
+                    getUrl(item.id).then(u => { if (!cancelled) setSrc(u); });
+                } else if (!cancelled) {
+                    setSrc(null); // free the data once scrolled well away
+                }
+            }
+        }, { rootMargin: '400px 0px' });
+        obs.observe(el);
+        return () => { cancelled = true; obs.disconnect(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [item.id, item.url]);
+
+    return (
+        <div ref={holderRef} className="w-full h-full">
+            {!src ? (
+                <div className="w-full h-full flex items-center justify-center bg-gray-200 dark:bg-indigo-900 animate-pulse">
+                    <Loader2 className="w-6 h-6 text-indigo-300 dark:text-indigo-700 animate-spin" />
+                </div>
+            ) : mediaType === 'video' ? (
+                // preload="metadata" only fetches enough to know duration/
+                // dimensions — it does NOT decode the full video the way an
+                // <img> tag forces a full (and doomed) decode attempt when
+                // handed video data.
+                <video
+                    src={src}
+                    preload="metadata"
+                    muted
+                    playsInline
+                    className="w-full h-full object-cover pointer-events-none"
+                />
+            ) : (
+                <img src={src} alt="Gallery Item" className="w-full h-full object-cover" loading="lazy" />
+            )}
+        </div>
+    );
+};
+
 // ── Gallery item card ─────────────────────────────────────────────────────────
 const GalleryItemCard: React.FC<{
     item: any;
@@ -50,8 +109,14 @@ const GalleryItemCard: React.FC<{
     timeZone: string;
     personas: any[];
     onReassign: (id: string, personaId: string | undefined) => void;
-}> = ({ item, mediaType, isSelectionMode, selectedIds, toggleSelectImage, setSelectedItem, handleDelete, handleCopyPrompt, activeTab, timeZone, personas, onReassign }) => {
+    getUrl: (id: string) => Promise<string | null>;
+}> = ({ item, mediaType, isSelectionMode, selectedIds, toggleSelectImage, setSelectedItem, handleDelete, handleCopyPrompt, activeTab, timeZone, personas, onReassign, getUrl }) => {
     const [showPopover, setShowPopover] = useState(false);
+
+    const openPreview = async () => {
+        const url = item.url || await getUrl(item.id);
+        if (url) setSelectedItem({ url, mediaType: mediaType as 'image' | 'video', prompt: item.prompt });
+    };
 
     return (
         <div className={`bg-gray-100 dark:bg-indigo-800 rounded-lg shadow-sm hover:shadow-md transition-all flex flex-col group relative border-2 ${selectedIds.includes(item.id) ? 'border-indigo-500 ring-2 ring-indigo-200' : 'border-transparent'}`}>
@@ -59,7 +124,7 @@ const GalleryItemCard: React.FC<{
                 className="aspect-square overflow-hidden rounded-t-lg cursor-pointer relative"
                 onClick={() => {
                     if (item.oversized) return; // nothing to preview — use Delete below
-                    isSelectionMode ? toggleSelectImage(item.id) : setSelectedItem({ url: item.url, mediaType: mediaType as 'image' | 'video', prompt: item.prompt });
+                    isSelectionMode ? toggleSelectImage(item.id) : openPreview();
                 }}
             >
                 {item.oversized ? (
@@ -70,22 +135,8 @@ const GalleryItemCard: React.FC<{
                         <p className="text-xs font-medium text-amber-700 dark:text-amber-400">Too large to preview</p>
                         <p className="text-[11px] text-amber-600/80 dark:text-amber-500/70 mt-0.5">~{item.approxSizeMB} MB</p>
                     </div>
-                ) : mediaType === 'video' ? (
-                    // preload="metadata" only fetches enough to know duration/
-                    // dimensions — it does NOT decode the full video the way an
-                    // <img> tag forces a full (and doomed) decode attempt when
-                    // handed video data. This matters a lot on a phone: a grid
-                    // full of <img> tags pointed at multi-MB base64 video data
-                    // is a realistic way to exhaust the tab's memory and crash.
-                    <video
-                        src={item.url}
-                        preload="metadata"
-                        muted
-                        playsInline
-                        className="w-full h-full object-cover pointer-events-none"
-                    />
                 ) : (
-                    <img src={item.url} alt="Gallery Item" className="w-full h-full object-cover" loading="lazy" />
+                    <LazyThumb item={item} mediaType={mediaType} getUrl={getUrl} />
                 )}
 
                 {mediaType === 'video' && !isSelectionMode && !item.oversized && (
@@ -114,7 +165,10 @@ const GalleryItemCard: React.FC<{
             <div className="flex items-center justify-center gap-1 px-2 py-2 bg-gray-50 dark:bg-indigo-950 border-t border-gray-200 dark:border-indigo-700">
                 {!item.oversized && (
                     <button
-                        onClick={() => downloadFile(item.url, `${activeTab}-${item.id}.png`)}
+                        onClick={async () => {
+                            const url = item.url || await getUrl(item.id);
+                            if (url) downloadFile(url, `${activeTab}-${item.id}.png`);
+                        }}
                         className="p-2 text-gray-500 dark:text-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-200 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
                         title="Download"
                     >
@@ -180,7 +234,7 @@ const GalleryItemCard: React.FC<{
 const GalleryScreen: React.FC = () => {
   const {
     gallery, deleteImageFromGallery, deleteImagesFromGallery, addToGallery,
-    updateGalleryItem, timeZone, addToast, galleryLoaded, loadGallery,
+    updateGalleryItem, timeZone, addToast, galleryLoaded, loadGallery, getGalleryItemUrl,
     savedPersonas, aiProfile,
   } = useApp();
 
@@ -334,7 +388,10 @@ const GalleryScreen: React.FC = () => {
     if (items.length === 0) { addToast({ title: 'Download', message: `No ${mediaType || 'gallery'} items to download.`, type: 'warning' }); return; }
     for (const item of items) {
       try {
-        const response = await fetch(item.url);
+        // Image data isn't held in memory — load each item on demand, one at a time
+        const url = item.url || await getGalleryItemUrl(item.id);
+        if (!url) continue;
+        const response = await fetch(url);
         const blob = await response.blob();
         const ext = getItemMediaType(item) === 'video' ? 'mp4' : 'png';
         zip.file(`${item.type}-${item.id}.${ext}`, blob);
@@ -468,6 +525,7 @@ const GalleryScreen: React.FC = () => {
                 timeZone={timeZone}
                 personas={allPersonas}
                 onReassign={handleReassign}
+                getUrl={getGalleryItemUrl}
             />
           ))}
         </div>

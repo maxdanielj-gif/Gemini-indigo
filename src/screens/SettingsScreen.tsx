@@ -224,8 +224,22 @@ const SettingsScreen: React.FC = () => {
     setIsGalleryBackingUp(true);
     setGalleryBackupStep(null);
     try {
+      // Feed the backup one image at a time straight from IndexedDB — gallery
+      // state only holds metadata now, and this keeps memory flat regardless
+      // of gallery size (the whole gallery never sits in memory at once).
+      async function* iterateGalleryFromDisk(): AsyncGenerator<GalleryBackupItem> {
+        const ids: string[] = (await loadFromDB('indigo_app_data_gallery_ids')) || [];
+        for (const id of ids) {
+          try {
+            const itemStr = await loadFromDB(`indigo_app_data_gallery_item_${id}`);
+            if (!itemStr) continue;
+            const parsed = typeof itemStr === 'string' ? JSON.parse(itemStr) : itemStr;
+            if (parsed?.url) yield parsed as GalleryBackupItem;
+          } catch { /* skip corrupt item */ }
+        }
+      }
       const count = await driveBackupGallery(
-        gallery as GalleryBackupItem[],
+        iterateGalleryFromDisk,
         (step) => setGalleryBackupStep(step),
       );
       setLastGalleryBackupTime(Date.now());
