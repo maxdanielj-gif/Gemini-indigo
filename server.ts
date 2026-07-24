@@ -448,7 +448,7 @@ function buildKBContext(knowledgeBase: any[], currentUserMessage: string): strin
 }
 
 // ── Build persona system prompt ───────────────────────────────────────────────
-function buildSystemPrompt(aiProfile: any, userProfile: any, timeZone?: string, memories?: any[], journal?: any[], knowledgeBase?: any[], currentUserMessage?: string): string {
+function buildSystemPrompt(aiProfile: any, userProfile: any, timeZone?: string, memories?: any[], journal?: any[], knowledgeBase?: any[], currentUserMessage?: string): { staticPrompt: string; dynamicPrompt: string } {
   const now = new Date();
   const timeContext = aiProfile.timeAwareness
     ? `\n\nCurrent time: ${now.toLocaleString("en-US", { timeZone: timeZone || "UTC", weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })}`
@@ -495,7 +495,13 @@ function buildSystemPrompt(aiProfile: any, userProfile: any, timeZone?: string, 
   // Knowledge base — inject relevant documents scored against the current message
   const kbContext = buildKBContext(knowledgeBase || [], currentUserMessage || "");
 
-  const parts = [
+  // ── Stable block ───────────────────────────────────────────────────────
+  // Everything here stays byte-for-byte identical from one message to the
+  // next (it only changes when the user edits the persona/profile, or when
+  // a memory/journal entry is added). This is the part we want Claude to
+  // cache — putting it in its own block, with nothing turn-varying mixed
+  // in, is what makes prompt caching actually pay off. See PROMPT_CACHING.md.
+  const staticParts = [
     `You are ${aiProfile.name}.`,
     `Personality: ${aiProfile.personality}.`,
     aiProfile.behavioralPatterns ? `Behavioral patterns: ${aiProfile.behavioralPatterns}.` : "",
@@ -508,17 +514,26 @@ function buildSystemPrompt(aiProfile: any, userProfile: any, timeZone?: string, 
     `Appearance: ${aiProfile.appearance}.`,
     `You are talking to: ${userProfile.name}.`,
     userProfile.info ? `About them: ${userProfile.info}.` : "",
-    timeContext,
     memoriesContext,
     journalContext,
-    kbContext,
     lengthGuidance,
     toneGuidance,
     personaGuidance,
     textOnlyGuidance,
   ];
 
-  return parts.filter(Boolean).join("\n");
+  // ── Dynamic block ──────────────────────────────────────────────────────
+  // Changes on every single message (current time, KB relevance re-scored
+  // against the newest message), so it must never sit in front of the
+  // stable block or the growing chat history — doing so would invalidate
+  // the cache for everything that follows it, every single turn. The
+  // caller injects this into the newest user message instead.
+  const dynamicParts = [timeContext, kbContext];
+
+  return {
+    staticPrompt: staticParts.filter(Boolean).join("\n"),
+    dynamicPrompt: dynamicParts.filter(Boolean).join("\n"),
+  };
 }
 
 // ── VAPID / Web Push setup ────────────────────────────────────────────────────
@@ -1070,7 +1085,7 @@ app.post("/api/chat", async (req, res) => {
     selectedModel = "gemini-3.5-flash";
   }
   
-  const baseSystemPrompt = buildSystemPrompt(aiProfile, userProfile, timeZone, memories, journal, knowledgeBase, currentUserMessage);
+  const { staticPrompt, dynamicPrompt } = buildSystemPrompt(aiProfile, userProfile, timeZone, memories, journal, knowledgeBase, currentUserMessage);
   // YouTube links force Gemini regardless of the chosen provider (existing
   // behavior, preserved). OpenRouter is otherwise only used when explicitly
   // selected — its model IDs (e.g. "meta-llama/llama-4-scout") have no
@@ -1158,7 +1173,17 @@ app.post("/api/chat", async (req, res) => {
     locationNote += `\n[System: Motion context — ${parts.join(' ')}]`;
   }
 
-  const systemPrompt = [baseSystemPrompt, providerNote, locationNote, googleToolsContext].filter(Boolean).join('\n\n');
+  // Cacheable system content — stable persona/profile/memories plus the
+  // (also static, per-provider) provider note. Nothing here changes turn to
+  // turn, which is what lets Claude cache it.
+  const cacheableSystemPrompt = [staticPrompt, providerNote].filter(Boolean).join('\n\n');
+  // Per-turn dynamic context — time, knowledge base, location/weather,
+  // search grounding. Recomputed fresh every message.
+  const dynamicContext = [dynamicPrompt, locationNote, googleToolsContext].filter(Boolean).join('\n\n');
+
+  // Gemini/OpenRouter don't use Anthropic-style prompt caching, so they just
+  // get the two pieces concatenated back into one plain system string.
+  const systemPrompt = [cacheableSystemPrompt, dynamicContext].filter(Boolean).join('\n\n');
 
   // ── Gemini path ───────────────────────────────────────────────────────────
   if (useGemini) {
@@ -1196,6 +1221,18 @@ app.post("/api/chat", async (req, res) => {
       content: m.content,
     }));
 
+    // Fold the per-turn dynamic context (time, knowledge base, location/
+    // weather, search grounding) into the newest user message rather than
+    // the system prompt. It has to live at the very end of the prefix Claude
+    // sees — anywhere earlier and it would invalidate the cache for
+    // everything that comes after it, every single turn.
+    if (dynamicContext && claudeMessages.length > 0) {
+      const last = claudeMessages[claudeMessages.length - 1];
+      if (last.role === "user" && typeof last.content === "string") {
+        last.content = `${dynamicContext}\n\n${last.content}`;
+      }
+    }
+
     // Attach images/PDFs to last user message if present
     if (attachments?.length > 0 && claudeMessages.length > 0) {
       const last = claudeMessages[claudeMessages.length - 1];
@@ -1221,10 +1258,30 @@ app.post("/api/chat", async (req, res) => {
       }
     }
 
+    // Cache breakpoint #1: everything up through prior chat history (all
+    // messages except the brand-new one we just added dynamic context to).
+    // Since the system block above is now fully stable, and nothing before
+    // this point in the prefix changes turn-to-turn, Claude can reuse this
+    // from the previous request instead of re-reading the whole
+    // conversation. Only kicks in once there's at least one prior turn.
+    if (claudeMessages.length > 1) {
+      const priorLast = claudeMessages[claudeMessages.length - 2];
+      if (typeof priorLast.content === "string") {
+        priorLast.content = [{ type: "text", text: priorLast.content, cache_control: { type: "ephemeral" } }] as any;
+      } else if (Array.isArray(priorLast.content) && priorLast.content.length > 0) {
+        const lastBlock = priorLast.content[priorLast.content.length - 1] as any;
+        lastBlock.cache_control = { type: "ephemeral" };
+      }
+    }
+
     const buildClaudeParams = (includeSamplingParams: boolean) => ({
       model: validateClaudeModel((useGemini || useOpenRouter) ? undefined : selectedModel),
       max_tokens: aiProfile.maxTokens ?? 2048,
-      system: systemPrompt,
+      // Cache breakpoint #2: the stable persona/profile/memories block.
+      // This is what lets Claude skip re-reading the persona description on
+      // every message, which is normally the single biggest chunk of a
+      // companion app's system prompt.
+      system: [{ type: "text", text: cacheableSystemPrompt, cache_control: { type: "ephemeral" } }],
       messages: claudeMessages,
       ...(includeSamplingParams ? {
         temperature: Math.min(1, Math.max(0, aiProfile.temperature ?? 0.7)),  // Claude range: 0–1
