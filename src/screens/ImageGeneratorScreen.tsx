@@ -9,7 +9,7 @@ import {
 // ── Constants ────────────────────────────────────────────────────────────────
 
 // ── WaveSpeed model registry ────────────────────────────────────────────────
-type WsModelId = 'wavespeed-ai/flux-2-klein-9b/edit' | 'bytedance/seedream-v4.5/edit' | 'wavespeed-ai/z-image-turbo/image-to-image' | 'z-ai/glm-image/edit';
+type WsModelId = 'wavespeed-ai/flux-2-klein-9b/edit' | 'wavespeed-ai/flux-2-klein-9b/edit-lora' | 'z-ai/glm-image/edit';
 
 const WS_MODELS: { id: WsModelId; name: string; maxImages: number; usesSeparateWH: boolean; hasSeed: boolean; hasOutputFormat: boolean; hasPromptExpansion: boolean; hasSafetyChecker: boolean; usesStarSize?: boolean; hasSingleImage?: boolean; hasStrength?: boolean }[] = [
   {
@@ -23,27 +23,14 @@ const WS_MODELS: { id: WsModelId; name: string; maxImages: number; usesSeparateW
     hasSafetyChecker: true,
   },
   {
-    id: 'bytedance/seedream-v4.5/edit',
-    name: 'Bytedance Seedream V4.5',
-    maxImages: 10,
+    id: 'wavespeed-ai/flux-2-klein-9b/edit-lora',
+    name: 'Flux 2 Klein 9B Edit (LoRA)',
+    maxImages: 3,
     usesSeparateWH: false,
-    hasSeed: false,
+    hasSeed: true,
     hasOutputFormat: false,
     hasPromptExpansion: false,
     hasSafetyChecker: false,
-  },
-  {
-    id: 'wavespeed-ai/z-image-turbo/image-to-image',
-    name: 'Z Image Turbo (Image-to-Image)',
-    maxImages: 1,          // takes a single image field
-    usesSeparateWH: false,
-    hasSeed: true,
-    hasOutputFormat: true,
-    hasPromptExpansion: false,
-    hasSafetyChecker: false,
-    usesStarSize: true,    // size format: "1024*1024" not "1024x1024"
-    hasSingleImage: true,  // sends image: string, not images: string[]
-    hasStrength: true,     // strength parameter 0-1
   },
   {
     id: 'z-ai/glm-image/edit',
