@@ -11,7 +11,7 @@ import {
 // ── WaveSpeed model registry ────────────────────────────────────────────────
 type WsModelId = 'wavespeed-ai/flux-2-klein-9b/edit' | 'wavespeed-ai/flux-2-klein-9b/edit-lora' | 'z-ai/glm-image/edit';
 
-const WS_MODELS: { id: WsModelId; name: string; maxImages: number; usesSeparateWH: boolean; hasSeed: boolean; hasOutputFormat: boolean; hasPromptExpansion: boolean; hasSafetyChecker: boolean; usesStarSize?: boolean; hasSingleImage?: boolean; hasStrength?: boolean }[] = [
+const WS_MODELS: { id: WsModelId; name: string; maxImages: number; usesSeparateWH: boolean; hasSeed: boolean; hasOutputFormat: boolean; hasPromptExpansion: boolean; hasSafetyChecker: boolean; usesStarSize?: boolean; hasSingleImage?: boolean; hasStrength?: boolean; hasLora?: boolean }[] = [
   {
     id: 'wavespeed-ai/flux-2-klein-9b/edit',
     name: 'Flux 2 Klein 9B (Default)',
@@ -31,6 +31,7 @@ const WS_MODELS: { id: WsModelId; name: string; maxImages: number; usesSeparateW
     hasOutputFormat: false,
     hasPromptExpansion: false,
     hasSafetyChecker: false,
+    hasLora: true,
   },
   {
     id: 'z-ai/glm-image/edit',
@@ -91,6 +92,7 @@ const ImageGeneratorScreen: React.FC = () => {
   const [wsOutputFormat, setWsOutputFormat] = useState<'jpeg' | 'png'>('jpeg');
   const [wsPromptExpand, setWsPromptExpand] = useState(false);
   const [wsStrength,     setWsStrength]     = useState(0.8);
+  const [wsLoras,        setWsLoras]        = useState<{ path: string; scale: number }[]>([]);
 
   const activeModel = WS_MODELS.find(m => m.id === wsModelId) ?? WS_MODELS[0];
   // Clamp wsImages array length to match the selected model's max
@@ -279,6 +281,10 @@ const ImageGeneratorScreen: React.FC = () => {
       if (activeModel.hasOutputFormat) body.output_format = wsOutputFormat;
       if (activeModel.hasPromptExpansion) body.enable_prompt_expansion = wsPromptExpand;
       if (activeModel.hasSafetyChecker) body.enable_safety_checker = false;
+      if (activeModel.hasLora) {
+        const cleanLoras = wsLoras.filter(l => l.path.trim()).map(l => ({ path: l.path.trim(), scale: l.scale }));
+        if (cleanLoras.length > 0) body.loras = cleanLoras;
+      }
 
       const r = await fetch('/api/wavespeed/generate', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
       if (!r.ok) { const e = await r.json(); throw new Error(e.error || 'Failed'); }
@@ -467,6 +473,47 @@ const ImageGeneratorScreen: React.FC = () => {
             <span>Preserve original</span>
             <span>Max change</span>
           </div>
+        </div>
+      )}
+      {activeModel.hasLora && (
+        <div className="p-3 bg-indigo-50 dark:bg-indigo-900/30 rounded-xl border border-indigo-100 dark:border-indigo-800 space-y-3">
+          <div>
+            <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300">LoRA Adapters <span className="font-normal text-indigo-400">(optional, up to 3)</span></p>
+            <p className="text-[10px] text-indigo-400 dark:text-indigo-500 mt-0.5">
+              Apply custom styles or characters. Each needs a direct URL to the LoRA weights file.
+            </p>
+          </div>
+
+          {wsLoras.map((lora, i) => (
+            <div key={i} className="flex gap-2 items-start">
+              <div className="flex-1 space-y-1">
+                <input type="text" value={lora.path}
+                  onChange={e => setWsLoras(prev => { const n = [...prev]; n[i] = { ...n[i], path: e.target.value }; return n; })}
+                  placeholder="https://.../lora-weights.safetensors"
+                  className="w-full p-2 border border-indigo-300 dark:border-indigo-700 rounded-xl bg-white dark:bg-indigo-950 text-indigo-900 dark:text-indigo-100 text-xs focus:ring-2 focus:ring-indigo-500 outline-none" />
+              </div>
+              <div className="w-20">
+                <input type="number" value={lora.scale} step={0.1} min={0} max={2}
+                  onChange={e => setWsLoras(prev => { const n = [...prev]; n[i] = { ...n[i], scale: parseFloat(e.target.value) || 0 }; return n; })}
+                  placeholder="Scale"
+                  className="w-full p-2 border border-indigo-300 dark:border-indigo-700 rounded-xl bg-white dark:bg-indigo-950 text-indigo-900 dark:text-indigo-100 text-xs focus:ring-2 focus:ring-indigo-500 outline-none" />
+              </div>
+              <button
+                onClick={() => setWsLoras(prev => prev.filter((_, idx) => idx !== i))}
+                className="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-red-100 dark:bg-red-900/40 text-red-500 hover:bg-red-200 dark:hover:bg-red-900">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+
+          {wsLoras.length < 3 && (
+            <button
+              onClick={() => setWsLoras(prev => [...prev, { path: '', scale: 1 }])}
+              className="w-full py-2 border border-dashed border-indigo-300 dark:border-indigo-700 rounded-xl text-xs text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-800 transition-colors">
+              + Add LoRA
+            </button>
+          )}
+          <p className="text-[10px] text-indigo-400">Scale = weight multiplier, default 1. Start at 1.0 and adjust based on results.</p>
         </div>
       )}
       {activeModel.hasOutputFormat && (
