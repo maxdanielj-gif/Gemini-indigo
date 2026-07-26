@@ -121,7 +121,7 @@ async function driveRestoreJson(filename: string): Promise<any | null> {
 }
 
 // ── Knowledge Base ──────────────────────────────────────────────────────────────
-export interface KBBackupFile { name: string; content: string; }
+export interface KBBackupFile { name: string; content: string; personaId?: string; }
 
 export async function driveBackupKnowledgeBase(files: KBBackupFile[]): Promise<number> {
   const valid = files.filter(f => f.name && f.content != null);
