@@ -890,8 +890,8 @@ const SettingsScreen: React.FC = () => {
               Enter your Firebase project credentials to enable cloud backup. Find these in the{' '}
               <a href="https://console.firebase.google.com" target="_blank" rel="noreferrer" className="underline font-medium">Firebase Console</a>{' '}
               → Project Settings → Your apps → SDK config.
-              Gallery, chat history, and knowledge base now back up to Google Drive instead of Firebase Storage
-              (Storage requires Google's paid Blaze plan) — <strong>Storage Bucket below is no longer needed</strong> for any of the buttons on this screen.
+              Gallery, chat history, and knowledge base back up to Google Drive instead of Firebase Storage,
+              which now requires Google's paid Blaze plan.
             </p>
 
             {/* 2-col grid for short fields */}
@@ -900,7 +900,6 @@ const SettingsScreen: React.FC = () => {
                 { label: 'API Key',              key: 'apiKey',            val: localFbApiKey,       set: setLocalFbApiKey,       ph: 'AIzaSy...' },
                 { label: 'Auth Domain',          key: 'authDomain',        val: localFbAuthDomain,   set: setLocalFbAuthDomain,   ph: 'project.firebaseapp.com' },
                 { label: 'Project ID',           key: 'projectId',         val: localFbProjectId,    set: setLocalFbProjectId,    ph: 'my-project-id' },
-                { label: 'Storage Bucket',       key: 'storageBucket',     val: localFbStorageBucket,set: setLocalFbStorageBucket,ph: 'project.firebasestorage.app' },
                 { label: 'Messaging Sender ID',  key: 'messagingSenderId', val: localFbSenderId,     set: setLocalFbSenderId,     ph: '123456789012' },
                 { label: 'App ID',               key: 'appId',             val: localFbAppId,        set: setLocalFbAppId,        ph: '1:123:web:abc123' },
               ].map(({ label, key, val, set, ph }) => (
