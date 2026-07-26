@@ -212,7 +212,11 @@ const SettingsScreen: React.FC = () => {
       // item that's already on this device (or gets restored via Full
       // Restore / Gallery restore below) — fill the photo back in if so.
       await resolveProfileImagesFromGallery();
-      addToast({ title: 'Restore complete', message: 'App data restored from Firebase. Gallery images can be restored using Full Restore below.', type: 'success' });
+      addToast({
+        title: 'Restore complete',
+        message: 'App data restored from Firebase. Gallery, chat history, and knowledge base live on Google Drive now — use "Restore All Data" below to bring all of it back in one go, or the individual Drive buttons for just one.',
+        type: 'success',
+      });
     } catch (e: any) {
       addToast({ title: 'Restore failed', message: e.message || 'Could not reach Firebase.', type: 'error' });
     } finally {
@@ -388,7 +392,7 @@ const SettingsScreen: React.FC = () => {
       try {
         const restoredKB = await driveRestoreKnowledgeBase();
         if (restoredKB) {
-          for (const file of restoredKB) addToKnowledgeBase({ name: file.name, content: file.content });
+          for (const file of restoredKB) addToKnowledgeBase({ name: file.name, content: file.content, personaId: file.personaId });
           kbMsg = restoredKB.length > 0 ? ` ${restoredKB.length} knowledge base file(s) restored.` : '';
         }
       } catch (kbErr: any) {
@@ -466,7 +470,7 @@ const SettingsScreen: React.FC = () => {
       }
       let added = 0;
       for (const file of files) {
-        addToKnowledgeBase({ name: file.name, content: file.content });
+        addToKnowledgeBase({ name: file.name, content: file.content, personaId: file.personaId });
         added++;
       }
       addToast({
@@ -886,6 +890,8 @@ const SettingsScreen: React.FC = () => {
               Enter your Firebase project credentials to enable cloud backup. Find these in the{' '}
               <a href="https://console.firebase.google.com" target="_blank" rel="noreferrer" className="underline font-medium">Firebase Console</a>{' '}
               → Project Settings → Your apps → SDK config.
+              Gallery, chat history, and knowledge base now back up to Google Drive instead of Firebase Storage
+              (Storage requires Google's paid Blaze plan) — <strong>Storage Bucket below is no longer needed</strong> for any of the buttons on this screen.
             </p>
 
             {/* 2-col grid for short fields */}
@@ -951,7 +957,8 @@ const SettingsScreen: React.FC = () => {
               <div className="border-t border-indigo-100 dark:border-indigo-800 pt-3">
                 <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300 mb-1">Restore Everything to This Device</p>
                 <p className="text-xs text-indigo-500 dark:text-indigo-400 mb-2">
-                  Downloads and applies your full backup: AI personas, chat history, memories, journal, settings, and gallery images.
+                  Downloads and applies your full backup: AI personas, memories, journal, and settings from Firestore,
+                  plus gallery images, chat history, and knowledge base from Google Drive.
                   <strong className="text-amber-600 dark:text-amber-400"> This overwrites current app data.</strong>
                 </p>
                 {!showRestoreConfirm ? (
@@ -972,7 +979,7 @@ const SettingsScreen: React.FC = () => {
                     ) : (
                       <>
                         <p className="text-sm font-medium text-amber-700 dark:text-amber-300">Are you sure?</p>
-                        <p className="text-xs text-amber-600 dark:text-amber-400">This will overwrite all current app data with your Firebase backup.</p>
+                        <p className="text-xs text-amber-600 dark:text-amber-400">This will overwrite all current app data with your Firebase and Google Drive backups.</p>
                         <div className="flex gap-2 pt-1">
                           <button onClick={handleFullFirebaseRestore}
                             data-testid="full-restore-confirm-btn"
@@ -1038,7 +1045,7 @@ const SettingsScreen: React.FC = () => {
                 </div>
               </div>
 
-              {/* Knowledge Base — Firebase Storage */}
+              {/* Knowledge Base — Google Drive */}
               <div className="border-t border-indigo-100 dark:border-indigo-800 pt-3">
                 <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300 mb-1">Knowledge Base (Google Drive)</p>
                 <p className="text-xs text-indigo-500 dark:text-indigo-400 mb-2">
@@ -1083,7 +1090,7 @@ const SettingsScreen: React.FC = () => {
                 </div>
               </div>
 
-              {/* Chat History — Firebase Storage */}
+              {/* Chat History — Google Drive */}
               <div className="border-t border-indigo-100 dark:border-indigo-800 pt-3">
                 <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300 mb-1">Chat History (Google Drive)</p>
                 <p className="text-xs text-indigo-500 dark:text-indigo-400 mb-2">
@@ -1135,7 +1142,8 @@ const SettingsScreen: React.FC = () => {
                     <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300">Real-time Sync</p>
                     <p className="text-xs text-indigo-500 dark:text-indigo-400 mt-0.5">
                       Syncs personas, memories, journal and settings to Firestore within 30 seconds of any change.
-                      New gallery images upload to Firebase Storage instantly.
+                      Gallery, knowledge base, and chat history are backed up to Google Drive using the buttons above/below —
+                      those aren't instant, since Drive backups are single files rather than per-item uploads.
                       Requires Firebase to be configured above.
                     </p>
                   </div>
