@@ -82,8 +82,8 @@ interface AppContextType extends AppState {
   addJournalEntry: (entry: JournalEntry) => void;
   updateJournalEntry: (id: string, updates: Partial<JournalEntry>) => void;
   deleteJournalEntry: (id: string) => void;
-  addToKnowledgeBase: (file: { name: string; content: string }) => void;
-  addMultipleToKnowledgeBase: (files: { name: string; content: string }[]) => void;
+  addToKnowledgeBase: (file: { name: string; content: string; personaId?: string }) => void;
+  addMultipleToKnowledgeBase: (files: { name: string; content: string; personaId?: string }[]) => void;
   deleteFromKnowledgeBase: (name: string) => void;
   deleteMultipleFromKnowledgeBase: (names: string[]) => void;
   addMemory: (memory: Memory) => void;
@@ -1552,15 +1552,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const stamped = { ...item, personaId: item.personaId ?? aiProfile.id };
     setGallery(prev => [stamped, ...prev]);
     saveData();
-    // Immediately upload to Firebase Storage when real-time sync is active
-    if (realTimeSyncEnabled && userId?.trim() && firebaseApiKey && firebaseProjectId && firebaseAppId && firebaseStorageBucket) {
-      const rtConfig = { apiKey: firebaseApiKey, projectId: firebaseProjectId, appId: firebaseAppId, storageBucket: firebaseStorageBucket };
-      uploadGalleryToFirebaseStorage(userId, [stamped], rtConfig).catch(e => {
-        console.error('Real-time gallery upload failed:', e);
-      });
-    }
+    // NOTE: this used to also upload the new image to Firebase Storage
+    // immediately when real-time sync was on. Firebase Storage now requires
+    // a project to be on the paid Blaze plan, so for anyone not on it that
+    // upload was silently failing on every single image (the error only
+    // ever went to console.error, never surfaced to the user). Gallery
+    // images are backed up via the "Backup Gallery" button (Google Drive)
+    // instead — see the Real-time Sync description in Settings.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [saveData, aiProfile.id, realTimeSyncEnabled, userId, firebaseApiKey, firebaseProjectId, firebaseAppId, firebaseStorageBucket]);
+  }, [saveData, aiProfile.id]);
 
   // Batched version of addToGallery — adds many items in a single state update
   // instead of one setGallery() call per item. This matters a lot for restores:
@@ -1574,14 +1574,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const stamped = items.map(item => ({ ...item, personaId: item.personaId ?? aiProfile.id }));
     setGallery(prev => [...stamped, ...prev]);
     saveData();
-    if (realTimeSyncEnabled && userId?.trim() && firebaseApiKey && firebaseProjectId && firebaseAppId && firebaseStorageBucket) {
-      const rtConfig = { apiKey: firebaseApiKey, projectId: firebaseProjectId, appId: firebaseAppId, storageBucket: firebaseStorageBucket };
-      uploadGalleryToFirebaseStorage(userId, stamped, rtConfig).catch(e => {
-        console.error('Real-time gallery upload failed:', e);
-      });
-    }
+    // See the note in addToGallery above — no more per-item Firebase Storage
+    // upload here either, for the same reason.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [saveData, aiProfile.id, realTimeSyncEnabled, userId, firebaseApiKey, firebaseProjectId, firebaseAppId, firebaseStorageBucket]);
+  }, [saveData, aiProfile.id]);
 
   const deleteImageFromGallery = (id: string) => {
     setGallery(prev => prev.filter(item => item.id !== id));
@@ -1750,12 +1746,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setJournal(prev => prev.filter(entry => entry.id !== id));
   };
 
-  const addToKnowledgeBase = (file: { name: string; content: string }) => {
-    setKnowledgeBase(prev => [...prev, { ...file, personaId: aiProfile.id }]);
+  const addToKnowledgeBase = (file: { name: string; content: string; personaId?: string }) => {
+    // Preserve an already-tagged personaId (e.g. from a Drive restore, which
+    // correctly carries each file's original owner) — only default to the
+    // currently active persona for genuinely new files that don't have one
+    // yet. The old unconditional overwrite here meant every restored file
+    // landed on whichever persona happened to be open at restore time,
+    // regardless of which persona it actually belonged to.
+    setKnowledgeBase(prev => [...prev, { ...file, personaId: file.personaId ?? aiProfile.id }]);
   };
 
-  const addMultipleToKnowledgeBase = (files: { name: string; content: string }[]) => {
-    setKnowledgeBase(prev => [...prev, ...files.map(f => ({ ...f, personaId: aiProfile.id }))]);
+  const addMultipleToKnowledgeBase = (files: { name: string; content: string; personaId?: string }[]) => {
+    setKnowledgeBase(prev => [...prev, ...files.map(f => ({ ...f, personaId: f.personaId ?? aiProfile.id }))]);
   };
 
   const deleteFromKnowledgeBase = (name: string) => {
