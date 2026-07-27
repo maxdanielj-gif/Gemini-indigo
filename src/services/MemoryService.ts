@@ -92,6 +92,14 @@ class MemoryService {
     return this.getSessionsForPersona(this.activePersonaId);
   }
 
+  // Every session across every persona, unfiltered. getSessions() above is
+  // deliberately scoped to the active persona for normal in-app use — this
+  // is the one to use for a full backup, so no persona's chat history gets
+  // silently left out of the export.
+  public getAllSessions(): ChatSession[] {
+    return this.sessions;
+  }
+
   public getActiveSessionId() {
     return this.activeSessionId;
   }
@@ -232,12 +240,17 @@ class MemoryService {
     }
   }
 
-  // Restore sessions from a backup (used by importData in AppContext)
-  public async restoreSessions(sessions: ChatSession[], activeSessionId: string | null) {
+  // Restore sessions from a backup (used by importData in AppContext).
+  // activePersonaId is restored too — without it, MemoryService would keep
+  // filtering by whichever persona was active *before* the restore, so the
+  // freshly-restored persona's own sessions wouldn't show up until the user
+  // manually switched personas once.
+  public async restoreSessions(sessions: ChatSession[], activeSessionId: string | null, activePersonaId?: string | null) {
     for (const s of this.sessions) {
       deleteFromDB(`${STORAGE_KEYS.PREFIX}${s.id}`).catch(() => {});
     }
     this.sessions = sessions.length > 0 ? sessions : [];
+    if (activePersonaId !== undefined) this.activePersonaId = activePersonaId;
     this.activeSessionId = activeSessionId || (sessions.length > 0 ? sessions[0].id : null);
     if (this.sessions.length === 0) {
       this.createNewSession('Chat');
