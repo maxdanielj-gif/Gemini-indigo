@@ -2039,8 +2039,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // chatHistory is redundant if it's already in the sessions
       // But we'll keep it for compatibility with the current importData logic
       // which expects it at the root. However, we can make it lean.
-      chatHistory, 
-      sessions,
+      chatHistory,
+      // NOTE: intentionally NOT the `sessions` parameter above — that's
+      // filtered to only the currently active persona (see ChatContext /
+      // MemoryService.getSessions()). getAllSessions() returns every
+      // persona's sessions, tagged with personaId, so a backup taken while
+      // chatting with one persona doesn't silently drop every other
+      // persona's conversation history.
+      sessions: memoryService.getAllSessions(),
       activeSessionId,
       journal,
       knowledgeBase,
@@ -2291,8 +2297,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setSavedPersonas((parsed.savedPersonas || [importedProfile]).map(withLocalPhoto));
       
       // 2. Restore Chat Data — must go through memoryService (setSessions/setChatHistory are no-ops)
+      const restoredPersonaId = importedProfile.id;
       const importedSessions = parsed.sessions || importedProfile.sessions || [];
-      const importedActiveId = parsed.activeSessionId || importedProfile.activeSessionId || (importedSessions.length > 0 ? importedSessions[0].id : null);
+      // Prefer a session that actually belongs to the persona being activated —
+      // now that a backup can contain every persona's sessions together,
+      // importedSessions[0] is no longer guaranteed to be the right persona's.
+      const importedActiveId = parsed.activeSessionId || importedProfile.activeSessionId
+        || importedSessions.find((s: any) => s.personaId === restoredPersonaId)?.id
+        || (importedSessions.length > 0 ? importedSessions[0].id : null);
 
       // If backup has no sessions but has legacy flat chatHistory, wrap it into one session
       let sessionsToRestore = importedSessions;
@@ -2305,12 +2317,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             messages: legacyHistory,
             createdAt: Date.now(),
             updatedAt: Date.now(),
+            personaId: restoredPersonaId,
           }];
         }
       }
 
-      // Restore sessions into MemoryService (the actual store — setSessions is a no-op)
-      memoryService.restoreSessions(sessionsToRestore, importedActiveId).catch(e =>
+      // Restore sessions into MemoryService (the actual store — setSessions is a no-op).
+      // Passing restoredPersonaId keeps MemoryService's active-persona filter in
+      // sync with the persona we just switched to above — otherwise it would
+      // keep showing sessions for whichever persona was active before the restore.
+      memoryService.restoreSessions(sessionsToRestore, importedActiveId, restoredPersonaId).catch(e =>
         console.error('Failed to restore sessions into MemoryService:', e)
       );
 
