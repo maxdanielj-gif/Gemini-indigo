@@ -7,6 +7,7 @@ import { processFile } from '../services/ocrService';
 import { Download, Upload, Trash2, Bell, FileText, Key, Save, Database, Smartphone, Cloud, RefreshCw, Clock, Shield, Edit2, LogOut, User, AlertCircle } from 'lucide-react';
 import { driveBackupGallery, driveRestoreGallery, driveSignOut, GalleryBackupItem, driveBackupKnowledgeBase, driveRestoreKnowledgeBase, driveBackupChatHistory, driveRestoreChatHistory } from '../services/googleDriveService';
 import { saveToDB, loadFromDB } from '../services/db';
+import { downloadJsonBackupFile } from '../utils/jsonBackup';
 
 const SettingsScreen: React.FC = () => {
   const {
@@ -516,6 +517,21 @@ const SettingsScreen: React.FC = () => {
     }
   };
 
+  // ── Manual Auto JSON Backup file export ─────────────────────────────────
+  const [isSavingBackupFile, setIsSavingBackupFile] = React.useState(false);
+  const handleSaveBackupFileNow = async () => {
+    setIsSavingBackupFile(true);
+    try {
+      const data = await exportData(chatHistory, sessions, activeSessionId);
+      const filename = await downloadJsonBackupFile(data);
+      addToast({ title: 'Backup file saved', message: `${filename} was saved to your device's Downloads.`, type: 'success' });
+    } catch (e: any) {
+      addToast({ title: 'Save failed', message: e?.message || 'Could not create the backup file.', type: 'error' });
+    } finally {
+      setIsSavingBackupFile(false);
+    }
+  };
+
   // ── Restore from the local Auto JSON Backup (this device only) ─────────────
   const handleRestoreLocalAutoBackup = async () => {
     try {
@@ -890,8 +906,8 @@ const SettingsScreen: React.FC = () => {
               Enter your Firebase project credentials to enable cloud backup. Find these in the{' '}
               <a href="https://console.firebase.google.com" target="_blank" rel="noreferrer" className="underline font-medium">Firebase Console</a>{' '}
               → Project Settings → Your apps → SDK config.
-              Gallery, chat history, and knowledge base back up to Google Drive instead of Firebase Storage,
-              which now requires Google's paid Blaze plan.
+              Gallery, chat history, and knowledge base now back up to Google Drive instead of Firebase Storage
+              (Storage requires Google's paid Blaze plan) — <strong>Storage Bucket below is no longer needed</strong> for any of the buttons on this screen.
             </p>
 
             {/* 2-col grid for short fields */}
@@ -900,6 +916,7 @@ const SettingsScreen: React.FC = () => {
                 { label: 'API Key',              key: 'apiKey',            val: localFbApiKey,       set: setLocalFbApiKey,       ph: 'AIzaSy...' },
                 { label: 'Auth Domain',          key: 'authDomain',        val: localFbAuthDomain,   set: setLocalFbAuthDomain,   ph: 'project.firebaseapp.com' },
                 { label: 'Project ID',           key: 'projectId',         val: localFbProjectId,    set: setLocalFbProjectId,    ph: 'my-project-id' },
+                { label: 'Storage Bucket',       key: 'storageBucket',     val: localFbStorageBucket,set: setLocalFbStorageBucket,ph: 'project.firebasestorage.app' },
                 { label: 'Messaging Sender ID',  key: 'messagingSenderId', val: localFbSenderId,     set: setLocalFbSenderId,     ph: '123456789012' },
                 { label: 'App ID',               key: 'appId',             val: localFbAppId,        set: setLocalFbAppId,        ph: '1:123:web:abc123' },
               ].map(({ label, key, val, set, ph }) => (
@@ -1235,13 +1252,20 @@ const SettingsScreen: React.FC = () => {
             </div>
             <p className="text-xs text-indigo-400 dark:text-indigo-500 -mt-2">
               Saves a full local snapshot on this device — including chat history and knowledge base, which the
-              Firestore backup above can't hold. This is a same-device safety net, not a substitute for cloud backup.
+              Firestore backup above can't hold. Every run saves an in-app snapshot AND downloads a timestamped
+              .json file to your device's Downloads. This is a same-device safety net, not a substitute for cloud backup.
               {autoJsonBackup && (
                 lastAutoJsonBackupTime
                   ? ` Last snapshot: ${timeAgo(lastAutoJsonBackupTime)}.`
                   : ' First snapshot will be saved shortly.'
               )}
             </p>
+            <button
+              onClick={handleSaveBackupFileNow}
+              disabled={isSavingBackupFile}
+              className="w-full py-2 bg-white dark:bg-indigo-900 border border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 rounded-xl font-medium hover:bg-indigo-50 dark:hover:bg-indigo-800 transition-colors text-sm disabled:opacity-50">
+              {isSavingBackupFile ? 'Saving…' : 'Save Backup File Now'}
+            </button>
             {lastAutoJsonBackupTime && (
               <button
                 onClick={handleRestoreLocalAutoBackup}
